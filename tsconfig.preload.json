@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "./out/preload",
+    "rootDir": "./src",
+    "declaration": true
+  },
+  "include": ["src/preload/**/*", "src/shared/**/*"]
+}

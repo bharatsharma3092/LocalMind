@@ -1,0 +1,25 @@
+appId: com.localmind.desktop
+productName: LocalMind
+directories:
+  buildResources: resources
+  output: dist
+files:
+  - "!**/.vscode/*"
+  - "!src/*"
+  - "!electron.vite.config.*"
+  - "!{.eslintcache,.eslintignore,.prettierignore,.prettierrc,dev-app-update.yml,CHANGELOG.md,README.md}"
+  - "!{tsconfig.json,tsconfig.node.json,tsconfig.main.json,tsconfig.preload.json,tsconfig.renderer.json}"
+asarUnpack:
+  - resources/**
+win:
+  executableName: localmind
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: LocalMind
+  uninstallDisplayName: LocalMind
+  createDesktopShortcut: always
+npmRebuild: false
