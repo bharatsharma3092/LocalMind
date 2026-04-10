@@ -20,25 +20,32 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('llm:startStream', async (event, request: LLMRequest) => {
     const browserWin = BrowserWindow.fromWebContents(event.sender)
-    if (!browserWin) {
-      return fail('Window not found — cannot stream response')
-    }
+    if (!browserWin) return fail('Window not found — cannot stream response')
 
     const streamId = createStreamId()
     const controller = new AbortController()
     activeStreams.set(streamId, controller)
-
-    // Init buffer BEFORE returning streamId. Renderer attaches listeners,
-    // then fires llm:ready which triggers replay of any buffered events.
     initStreamBuffer(streamId)
 
-    // Fire-and-forget: runs concurrently while renderer sets up listeners
     ;(async () => {
       try {
-        for await (const chunk of llmRouter.complete({ ...request, signal: controller.signal })) {
+        for await (const chunk of llmRouter.complete({ ...request, stream: true, signal: controller.signal })) {
           if (controller.signal.aborted) break
-          if (!browserWin.isDestroyed()) sendChunk(browserWin, streamId, chunk)
+          if (browserWin.isDestroyed()) break
+
+          // FIX: Route 'done' and 'error' chunk types to their dedicated IPC
+          // channels so the renderer's onDone/onError listeners fire correctly.
+          // Previously ALL chunks went through sendChunk → llm:chunk:* so
+          // onDone (listening on llm:done:*) NEVER fired → stuck spinner.
+          if (chunk.type === 'done') {
+            sendDone(browserWin, streamId, chunk.usage ?? { promptTokens: 0, completionTokens: 0 })
+          } else if (chunk.type === 'error') {
+            sendError(browserWin, streamId, (chunk as any).content ?? 'Unknown error')
+          } else {
+            sendChunk(browserWin, streamId, chunk)
+          }
         }
+        // If provider never yielded a 'done' chunk (e.g. aborted), send it now
         if (!controller.signal.aborted && !browserWin.isDestroyed()) {
           sendDone(browserWin, streamId, { promptTokens: 0, completionTokens: 0 })
         }
@@ -48,10 +55,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         }
       } finally {
         activeStreams.delete(streamId)
-        // FIX: clearStreamBuffer is now safe to call here — it defers actual
-        // cleanup to the llm:ready handler if replay hasn't happened yet,
-        // preventing the race where the buffer was wiped before the renderer
-        // received the buffered 'done' event.
         clearStreamBuffer(streamId)
       }
     })()
@@ -213,7 +216,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   }))
 
   // ─── MCP (stubs for Phase 1) ──────────────────────
-
   ipcMain.handle('mcp:connect', safeHandle(async () => { return undefined }))
   ipcMain.handle('mcp:disconnect', safeHandle(async () => { return undefined }))
   ipcMain.handle('mcp:restart', safeHandle(async () => { return undefined }))
@@ -226,7 +228,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('mcp:getPrompt', safeHandle(async () => { return null }))
 
   // ─── Skills (stubs) ───────────────────────────────
-
   ipcMain.handle('skill:list', safeHandle(async () => { return [] }))
   ipcMain.handle('skill:activate', safeHandle(async () => { return undefined }))
   ipcMain.handle('skill:run', safeHandle(async () => { return null }))
@@ -235,14 +236,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('skill:delete', safeHandle(async () => { return undefined }))
 
   // ─── Artifacts (stubs) ────────────────────────────
-
   ipcMain.handle('artifact:save', safeHandle(async () => { return undefined }))
   ipcMain.handle('artifact:list', safeHandle(async () => { return [] }))
   ipcMain.handle('artifact:export', safeHandle(async () => { return '' }))
   ipcMain.handle('artifact:getVersions', safeHandle(async () => { return [] }))
 
   // ─── Workspaces (stubs) ────────────────────────────
-
   ipcMain.handle('workspace:create', safeHandle(async () => { return undefined }))
   ipcMain.handle('workspace:list', safeHandle(async () => { return [] }))
   ipcMain.handle('workspace:update', safeHandle(async () => { return undefined }))
@@ -250,14 +249,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('workspace:setActive', safeHandle(async () => { return undefined }))
 
   // ─── Personas (stubs) ──────────────────────────────
-
   ipcMain.handle('persona:list', safeHandle(async () => { return [] }))
   ipcMain.handle('persona:create', safeHandle(async () => { return undefined }))
   ipcMain.handle('persona:update', safeHandle(async () => { return undefined }))
   ipcMain.handle('persona:delete', safeHandle(async () => { return undefined }))
 
   // ─── RAG (stubs) ───────────────────────────────────
-
   ipcMain.handle('rag:index', safeHandle(async () => { return undefined }))
   ipcMain.handle('rag:query', safeHandle(async () => { return [] }))
   ipcMain.handle('rag:status', safeHandle(async () => { return null }))
@@ -265,13 +262,11 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('rag:removeDocument', safeHandle(async () => { return undefined }))
 
   // ─── Data (stubs) ──────────────────────────────────
-
   ipcMain.handle('data:exportAll', safeHandle(async () => { return '' }))
   ipcMain.handle('data:importAll', safeHandle(async () => { return null }))
   ipcMain.handle('data:exportConversation', safeHandle(async () => { return undefined }))
 
   // ─── File (stubs) ──────────────────────────────────
-
   ipcMain.handle('file:upload', safeHandle(async () => { return null }))
   ipcMain.handle('file:read', safeHandle(async (_, filePath: string) => {
     const fs = await import('fs/promises')
@@ -280,6 +275,5 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('file:uploadFolder', safeHandle(async () => { return [] }))
 
   // ─── URL (stubs) ───────────────────────────────────
-
   ipcMain.handle('url:fetch', safeHandle(async () => { return '' }))
 }

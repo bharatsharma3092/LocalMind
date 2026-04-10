@@ -1,17 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('localmind', {
-  // LLM
   llm: {
     startStream: (req: any) => ipcRenderer.invoke('llm:startStream', req),
     cancelStream: (streamId: string) => ipcRenderer.invoke('llm:cancelStream', streamId),
     listModels: (provider: string) => ipcRenderer.invoke('llm:listModels', provider),
     estimateCost: (req: any) => ipcRenderer.invoke('llm:estimateCost', req),
-
-    // FIX: renderer calls this after all onChunk/onDone/onError listeners are
-    // attached. Main process holds buffered chunks until this signal arrives,
-    // preventing the race condition where slow model cold-load (e.g. gemma4:e4b
-    // ~34s startup) causes chunks to be sent before listeners are registered.
     signalReady: (streamId: string) => ipcRenderer.send(`llm:ready:${streamId}`, streamId),
 
     onChunk: (streamId: string, cb: (chunk: any) => void) => {
@@ -20,17 +14,31 @@ contextBridge.exposeInMainWorld('localmind', {
       ipcRenderer.on(channel, handler)
       return () => ipcRenderer.removeListener(channel, handler)
     },
+
+    // FIX: Use on()+removeListener() instead of once().
+    // once() can miss the event if it fires during buffer-replay before the
+    // React render cycle registers it. on() ensures we catch it even if it
+    // arrives immediately after signalReady flushes the buffer, then
+    // self-removes after the first call to prevent duplicate finalization.
     onDone: (streamId: string, cb: (usage: any) => void) => {
       const channel = `llm:done:${streamId}`
-      ipcRenderer.once(channel, (_: any, usage: any) => cb(usage))
+      const handler = (_: any, usage: any) => {
+        ipcRenderer.removeListener(channel, handler)
+        cb(usage)
+      }
+      ipcRenderer.on(channel, handler)
     },
+
     onError: (streamId: string, cb: (err: string) => void) => {
       const channel = `llm:error:${streamId}`
-      ipcRenderer.once(channel, (_: any, err: string) => cb(err))
+      const handler = (_: any, err: string) => {
+        ipcRenderer.removeListener(channel, handler)
+        cb(err)
+      }
+      ipcRenderer.on(channel, handler)
     },
   },
 
-  // DB
   db: {
     createConversation: (data: any) => ipcRenderer.invoke('db:createConversation', data),
     getConversations: () => ipcRenderer.invoke('db:getConversations'),
@@ -43,7 +51,6 @@ contextBridge.exposeInMainWorld('localmind', {
     generateTitle: (convId: string) => ipcRenderer.invoke('db:generateTitle', convId),
   },
 
-  // Settings
   settings: {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: any) => ipcRenderer.invoke('settings:set', key, value),
@@ -52,7 +59,6 @@ contextBridge.exposeInMainWorld('localmind', {
     updateShortcut: (shortcut: string) => ipcRenderer.invoke('settings:updateShortcut', shortcut),
   },
 
-  // MCP
   mcp: {
     connect: (config: any) => ipcRenderer.invoke('mcp:connect', config),
     disconnect: (serverId: string) => ipcRenderer.invoke('mcp:disconnect', serverId),
@@ -66,7 +72,6 @@ contextBridge.exposeInMainWorld('localmind', {
     getPrompt: (serverId: string, promptName: string, args?: any) => ipcRenderer.invoke('mcp:getPrompt', serverId, promptName, args),
   },
 
-  // Skills
   skill: {
     list: () => ipcRenderer.invoke('skill:list'),
     activate: (skillId: string, convId: string) => ipcRenderer.invoke('skill:activate', skillId, convId),
@@ -76,7 +81,6 @@ contextBridge.exposeInMainWorld('localmind', {
     delete: (id: string) => ipcRenderer.invoke('skill:delete', id),
   },
 
-  // Artifacts
   artifact: {
     save: (data: any) => ipcRenderer.invoke('artifact:save', data),
     list: (convId: string) => ipcRenderer.invoke('artifact:list', convId),
@@ -84,7 +88,6 @@ contextBridge.exposeInMainWorld('localmind', {
     getVersions: (id: string) => ipcRenderer.invoke('artifact:getVersions', id),
   },
 
-  // Workspaces
   workspace: {
     create: (data: any) => ipcRenderer.invoke('workspace:create', data),
     list: () => ipcRenderer.invoke('workspace:list'),
@@ -93,7 +96,6 @@ contextBridge.exposeInMainWorld('localmind', {
     setActive: (id: string) => ipcRenderer.invoke('workspace:setActive', id),
   },
 
-  // Personas
   persona: {
     list: () => ipcRenderer.invoke('persona:list'),
     create: (data: any) => ipcRenderer.invoke('persona:create', data),
@@ -101,7 +103,6 @@ contextBridge.exposeInMainWorld('localmind', {
     delete: (id: string) => ipcRenderer.invoke('persona:delete', id),
   },
 
-  // RAG
   rag: {
     index: (filePath: string) => ipcRenderer.invoke('rag:index', filePath),
     query: (text: string, topK?: number) => ipcRenderer.invoke('rag:query', text, topK),
@@ -115,26 +116,22 @@ contextBridge.exposeInMainWorld('localmind', {
     },
   },
 
-  // Data
   data: {
     exportAll: () => ipcRenderer.invoke('data:exportAll'),
     importAll: (zipPath: string) => ipcRenderer.invoke('data:importAll', zipPath),
     exportConversation: (convId: string, format: 'pdf' | 'md') => ipcRenderer.invoke('data:exportConversation', convId, format),
   },
 
-  // File
   file: {
     upload: (fileData: any) => ipcRenderer.invoke('file:upload', fileData),
     read: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
     uploadFolder: (dirPath: string, extensions?: string[]) => ipcRenderer.invoke('file:uploadFolder', dirPath, extensions),
   },
 
-  // URL
   url: {
     fetch: (url: string) => ipcRenderer.invoke('url:fetch', url),
   },
 
-  // Secrets
   secrets: {
     get: (service: string) => ipcRenderer.invoke('secrets:get', service),
     set: (service: string, value: string) => ipcRenderer.invoke('secrets:set', service, value),
