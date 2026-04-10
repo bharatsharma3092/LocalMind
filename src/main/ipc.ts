@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid'
 import { db, persistDatabase } from './db/connection'
 import { conversations, messages, workspaces, mcpServers, skills, personas, artifacts } from './db/schema'
 import { eq, like, desc, and, gt } from 'drizzle-orm'
-import { safeHandle } from './utils/ipc-response'
+import { ok, fail, safeHandle } from './utils/ipc-response'
 import { appStore } from './settings/app-store'
 import { getSecret, setSecret } from './settings/secrets'
 import { llmRouter } from './llm/router'
@@ -19,26 +19,36 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   // ─── LLM ──────────────────────────────────────────
 
   ipcMain.handle('llm:startStream', async (event, request: LLMRequest) => {
+    // BUG FIX 1: capture win synchronously before any await, add null guard
+    const browserWin = BrowserWindow.fromWebContents(event.sender)
+    if (!browserWin) {
+      return fail('Window not found — cannot stream response')
+    }
+
     const streamId = createStreamId()
     const controller = new AbortController()
     activeStreams.set(streamId, controller)
-    const browserWin = BrowserWindow.fromWebContents(event.sender)!
 
+    // BUG FIX 2: fire-and-forget — do NOT await, return streamId immediately
     ;(async () => {
       try {
         for await (const chunk of llmRouter.complete({ ...request, signal: controller.signal })) {
           if (controller.signal.aborted) break
-          sendChunk(browserWin, streamId, chunk)
+          if (!browserWin.isDestroyed()) sendChunk(browserWin, streamId, chunk)
         }
-        sendDone(browserWin, streamId, { promptTokens: 0, completionTokens: 0 })
+        if (!browserWin.isDestroyed()) sendDone(browserWin, streamId, { promptTokens: 0, completionTokens: 0 })
       } catch (err: any) {
-        sendError(browserWin, streamId, err.message ?? 'Unknown error')
+        if (!browserWin.isDestroyed()) sendError(browserWin, streamId, err.message ?? 'Unknown error')
       } finally {
         activeStreams.delete(streamId)
       }
     })()
 
-    return { streamId }
+    // BUG FIX 3: wrap in ok() so renderer gets {success:true, data:{streamId}}
+    // useStreaming reads: res?.streamId ?? res?.data?.streamId
+    // Without ok() wrapper it was returning raw {streamId} which the safeHandle
+    // path couldn't unwrap, leaving streamId undefined → "Failed to start stream"
+    return ok({ streamId })
   })
 
   ipcMain.handle('llm:cancelStream', async (_, streamId: string) => {
