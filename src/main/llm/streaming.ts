@@ -7,71 +7,120 @@ export function createStreamId(): string {
 }
 
 // ── Chunk buffer ──────────────────────────────────────────────────────────────
-// When a model is cold-loading (e.g. gemma4:e4b takes ~34s to start), the LLM
-// stream can produce chunks BEFORE the renderer has had a chance to register its
-// ipcRenderer.on listeners.  We buffer every event per-stream and replay them
-// as soon as the renderer signals it is ready via 'llm:ready:<streamId>'.
+// Problem being solved:
+//   1. Slow model cold-load (e.g. gemma4:e4b ~34s) means LLM chunks arrive
+//      before the renderer's ipcRenderer.on listeners are registered.
+//   2. The previous fix introduced a NEW race: ipc.ts finally{} called
+//      clearStreamBuffer() as soon as the LLM stream ended — but the renderer
+//      may not have sent llm:ready yet, so the buffer (including 'done') was
+//      wiped before replay, leaving the renderer stuck forever.
+//
+// Solution:
+//   • Buffer all events as before.
+//   • Track whether the stream has FINISHED producing events ('streamDone').
+//   • clearStreamBuffer() now only removes the buffer if the stream is already
+//     done AND ready has already fired (i.e. replay already happened).
+//     If ready hasn't fired yet, it sets a 'pendingClear' flag so the
+//     llm:ready handler cleans up after replay instead.
+//   • ipc.ts finally{} still calls clearStreamBuffer() — it just becomes a
+//     no-op when replay hasn't happened yet, deferring to the ready handler.
+
+interface StreamState {
+  buffer: BufferedEvent[]
+  ready: boolean       // renderer has fired llm:ready
+  done: boolean        // LLM stream has finished (done or error emitted)
+  pendingClear: boolean // ipc finally ran before ready — clear after replay
+}
 
 interface BufferedEvent {
   type: 'chunk' | 'done' | 'error'
   payload: LLMStreamChunk | TokenUsage | string
 }
 
-const streamBuffers = new Map<string, BufferedEvent[]>()
-const readyStreams = new Set<string>()
+const streams = new Map<string, StreamState>()
 
 export function initStreamBuffer(streamId: string): void {
-  streamBuffers.set(streamId, [])
-  readyStreams.delete(streamId)
+  streams.set(streamId, { buffer: [], ready: false, done: false, pendingClear: false })
 
-  // One-time IPC: renderer calls this once its listeners are attached
-  ipcMain.once(`llm:ready:${streamId}`, (_event, _sid: string) => {
-    readyStreams.add(streamId)
+  // One-time IPC: renderer fires this after all listeners are attached
+  ipcMain.once(`llm:ready:${streamId}`, () => {
+    const state = streams.get(streamId)
+    if (!state) return
+
+    state.ready = true
     const win = BrowserWindow.getAllWindows()[0]
-    if (!win) return
-    const buffered = streamBuffers.get(streamId) ?? []
-    for (const evt of buffered) {
-      if (evt.type === 'chunk') win.webContents.send(`llm:chunk:${streamId}`, evt.payload)
-      else if (evt.type === 'done') win.webContents.send(`llm:done:${streamId}`, evt.payload)
-      else if (evt.type === 'error') win.webContents.send(`llm:error:${streamId}`, evt.payload)
+    if (win && !win.isDestroyed()) {
+      for (const evt of state.buffer) {
+        if (evt.type === 'chunk') win.webContents.send(`llm:chunk:${streamId}`, evt.payload)
+        else if (evt.type === 'done') win.webContents.send(`llm:done:${streamId}`, evt.payload)
+        else if (evt.type === 'error') win.webContents.send(`llm:error:${streamId}`, evt.payload)
+      }
     }
-    streamBuffers.delete(streamId)
+    state.buffer = []
+
+    // If ipc.ts finally{} already ran, clean up now
+    if (state.pendingClear) {
+      streams.delete(streamId)
+    }
   })
 }
 
+/**
+ * Called from ipc.ts finally{}.
+ * Safe to call at any time — defers cleanup if replay hasn't happened yet.
+ */
 export function clearStreamBuffer(streamId: string): void {
-  streamBuffers.delete(streamId)
-  readyStreams.delete(streamId)
+  const state = streams.get(streamId)
+  if (!state) return
+
+  if (state.ready) {
+    // Ready already fired and replay is done — safe to remove immediately
+    streams.delete(streamId)
+  } else {
+    // Renderer hasn't signalled ready yet — defer cleanup to the ready handler
+    state.pendingClear = true
+  }
 }
 
 // ── Send helpers ──────────────────────────────────────────────────────────────
 
 export function sendChunk(win: BrowserWindow, streamId: string, chunk: LLMStreamChunk): void {
-  if (readyStreams.has(streamId)) {
+  const state = streams.get(streamId)
+  if (!state) {
+    win.webContents.send(`llm:chunk:${streamId}`, chunk)
+    return
+  }
+  if (state.ready) {
     win.webContents.send(`llm:chunk:${streamId}`, chunk)
   } else {
-    const buf = streamBuffers.get(streamId)
-    if (buf) buf.push({ type: 'chunk', payload: chunk })
-    else win.webContents.send(`llm:chunk:${streamId}`, chunk) // fallback: no buffer registered
+    state.buffer.push({ type: 'chunk', payload: chunk })
   }
 }
 
 export function sendDone(win: BrowserWindow, streamId: string, usage: TokenUsage): void {
-  if (readyStreams.has(streamId)) {
+  const state = streams.get(streamId)
+  if (!state) {
+    win.webContents.send(`llm:done:${streamId}`, usage)
+    return
+  }
+  state.done = true
+  if (state.ready) {
     win.webContents.send(`llm:done:${streamId}`, usage)
   } else {
-    const buf = streamBuffers.get(streamId)
-    if (buf) buf.push({ type: 'done', payload: usage })
-    else win.webContents.send(`llm:done:${streamId}`, usage)
+    state.buffer.push({ type: 'done', payload: usage })
   }
 }
 
 export function sendError(win: BrowserWindow, streamId: string, error: string): void {
-  if (readyStreams.has(streamId)) {
+  const state = streams.get(streamId)
+  if (!state) {
+    win.webContents.send(`llm:error:${streamId}`, error)
+    return
+  }
+  state.done = true
+  if (state.ready) {
     win.webContents.send(`llm:error:${streamId}`, error)
   } else {
-    const buf = streamBuffers.get(streamId)
-    if (buf) buf.push({ type: 'error', payload: error })
-    else win.webContents.send(`llm:error:${streamId}`, error)
+    state.buffer.push({ type: 'error', payload: error })
   }
 }

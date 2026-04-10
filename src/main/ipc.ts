@@ -28,24 +28,30 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     const controller = new AbortController()
     activeStreams.set(streamId, controller)
 
-    // FIX: Init the chunk buffer BEFORE returning streamId to the renderer.
-    // This guarantees that any chunks produced during slow model cold-load
-    // (e.g. gemma4:e4b takes ~34s) are buffered and replayed once the renderer
-    // signals readiness via 'llm:ready:<streamId>'.
+    // Init buffer BEFORE returning streamId. Renderer attaches listeners,
+    // then fires llm:ready which triggers replay of any buffered events.
     initStreamBuffer(streamId)
 
-    // Fire-and-forget async stream loop
+    // Fire-and-forget: runs concurrently while renderer sets up listeners
     ;(async () => {
       try {
         for await (const chunk of llmRouter.complete({ ...request, signal: controller.signal })) {
           if (controller.signal.aborted) break
           if (!browserWin.isDestroyed()) sendChunk(browserWin, streamId, chunk)
         }
-        if (!browserWin.isDestroyed()) sendDone(browserWin, streamId, { promptTokens: 0, completionTokens: 0 })
+        if (!controller.signal.aborted && !browserWin.isDestroyed()) {
+          sendDone(browserWin, streamId, { promptTokens: 0, completionTokens: 0 })
+        }
       } catch (err: any) {
-        if (!browserWin.isDestroyed()) sendError(browserWin, streamId, err.message ?? 'Unknown error')
+        if (!browserWin.isDestroyed()) {
+          sendError(browserWin, streamId, err.message ?? 'Unknown error')
+        }
       } finally {
         activeStreams.delete(streamId)
+        // FIX: clearStreamBuffer is now safe to call here — it defers actual
+        // cleanup to the llm:ready handler if replay hasn't happened yet,
+        // preventing the race where the buffer was wiped before the renderer
+        // received the buffered 'done' event.
         clearStreamBuffer(streamId)
       }
     })()
