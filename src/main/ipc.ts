@@ -7,7 +7,7 @@ import { ok, fail, safeHandle } from './utils/ipc-response'
 import { appStore } from './settings/app-store'
 import { getSecret, setSecret } from './settings/secrets'
 import { llmRouter } from './llm/router'
-import { createStreamId, sendChunk, sendDone, sendError } from './llm/streaming'
+import { createStreamId, initStreamBuffer, clearStreamBuffer, sendChunk, sendDone, sendError } from './llm/streaming'
 import { generateConversationTitle } from './llm/auto-title'
 import { countTokens } from './llm/token-counter'
 import type { LLMRequest } from './llm/types'
@@ -16,10 +16,9 @@ const activeStreams = new Map<string, AbortController>()
 
 export function registerIpcHandlers(win: BrowserWindow): void {
 
-  // ─── LLM ──────────────────────────────────────────
+  // ─── LLM ────────────────────────────────────────────────
 
   ipcMain.handle('llm:startStream', async (event, request: LLMRequest) => {
-    // BUG FIX 1: capture win synchronously before any await, add null guard
     const browserWin = BrowserWindow.fromWebContents(event.sender)
     if (!browserWin) {
       return fail('Window not found — cannot stream response')
@@ -29,7 +28,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     const controller = new AbortController()
     activeStreams.set(streamId, controller)
 
-    // BUG FIX 2: fire-and-forget — do NOT await, return streamId immediately
+    // FIX: Init the chunk buffer BEFORE returning streamId to the renderer.
+    // This guarantees that any chunks produced during slow model cold-load
+    // (e.g. gemma4:e4b takes ~34s) are buffered and replayed once the renderer
+    // signals readiness via 'llm:ready:<streamId>'.
+    initStreamBuffer(streamId)
+
+    // Fire-and-forget async stream loop
     ;(async () => {
       try {
         for await (const chunk of llmRouter.complete({ ...request, signal: controller.signal })) {
@@ -41,19 +46,17 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         if (!browserWin.isDestroyed()) sendError(browserWin, streamId, err.message ?? 'Unknown error')
       } finally {
         activeStreams.delete(streamId)
+        clearStreamBuffer(streamId)
       }
     })()
 
-    // BUG FIX 3: wrap in ok() so renderer gets {success:true, data:{streamId}}
-    // useStreaming reads: res?.streamId ?? res?.data?.streamId
-    // Without ok() wrapper it was returning raw {streamId} which the safeHandle
-    // path couldn't unwrap, leaving streamId undefined → "Failed to start stream"
     return ok({ streamId })
   })
 
   ipcMain.handle('llm:cancelStream', async (_, streamId: string) => {
     activeStreams.get(streamId)?.abort()
     activeStreams.delete(streamId)
+    clearStreamBuffer(streamId)
   })
 
   ipcMain.handle('llm:listModels', safeHandle(async (_, provider: string) => {
@@ -68,7 +71,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return { promptTokens, completionTokens: request.maxTokens ?? 1024 }
   }))
 
-  // ─── DB ───────────────────────────────────────────
+  // ─── DB ─────────────────────────────────────────────────
 
   ipcMain.handle('db:createConversation', safeHandle(async (_, data: any) => {
     const id = data.id ?? uuid()
@@ -111,7 +114,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       branchId: msg.branchId ?? null,
       createdAt: msg.createdAt ?? Date.now(),
     })
-    // Update conversation timestamp
     await db.update(conversations)
       .set({ updatedAt: Date.now() })
       .where(eq(conversations.id, msg.conversationId))
@@ -158,7 +160,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return undefined
   }))
 
-  // ─── Settings ─────────────────────────────────────
+  // ─── Settings ─────────────────────────────────────────
 
   ipcMain.handle('settings:get', safeHandle(async (_, key: string) => {
     return appStore.get(key as any)
@@ -193,7 +195,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return undefined
   }))
 
-  // ─── Secrets ──────────────────────────────────────
+  // ─── Secrets ───────────────────────────────────────────
 
   ipcMain.handle('secrets:get', safeHandle(async (_, service: string) => {
     return await getSecret(service)
@@ -204,7 +206,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return undefined
   }))
 
-  // ─── MCP (stubs for Phase 1) ─────────────────────
+  // ─── MCP (stubs for Phase 1) ──────────────────────
 
   ipcMain.handle('mcp:connect', safeHandle(async () => { return undefined }))
   ipcMain.handle('mcp:disconnect', safeHandle(async () => { return undefined }))
@@ -217,7 +219,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('mcp:listPrompts', safeHandle(async () => { return [] }))
   ipcMain.handle('mcp:getPrompt', safeHandle(async () => { return null }))
 
-  // ─── Skills (stubs) ──────────────────────────────
+  // ─── Skills (stubs) ───────────────────────────────
 
   ipcMain.handle('skill:list', safeHandle(async () => { return [] }))
   ipcMain.handle('skill:activate', safeHandle(async () => { return undefined }))
@@ -226,14 +228,14 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('skill:update', safeHandle(async () => { return undefined }))
   ipcMain.handle('skill:delete', safeHandle(async () => { return undefined }))
 
-  // ─── Artifacts (stubs) ───────────────────────────
+  // ─── Artifacts (stubs) ────────────────────────────
 
   ipcMain.handle('artifact:save', safeHandle(async () => { return undefined }))
   ipcMain.handle('artifact:list', safeHandle(async () => { return [] }))
   ipcMain.handle('artifact:export', safeHandle(async () => { return '' }))
   ipcMain.handle('artifact:getVersions', safeHandle(async () => { return [] }))
 
-  // ─── Workspaces (stubs) ──────────────────────────
+  // ─── Workspaces (stubs) ────────────────────────────
 
   ipcMain.handle('workspace:create', safeHandle(async () => { return undefined }))
   ipcMain.handle('workspace:list', safeHandle(async () => { return [] }))
@@ -241,14 +243,14 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('workspace:delete', safeHandle(async () => { return undefined }))
   ipcMain.handle('workspace:setActive', safeHandle(async () => { return undefined }))
 
-  // ─── Personas (stubs) ────────────────────────────
+  // ─── Personas (stubs) ──────────────────────────────
 
   ipcMain.handle('persona:list', safeHandle(async () => { return [] }))
   ipcMain.handle('persona:create', safeHandle(async () => { return undefined }))
   ipcMain.handle('persona:update', safeHandle(async () => { return undefined }))
   ipcMain.handle('persona:delete', safeHandle(async () => { return undefined }))
 
-  // ─── RAG (stubs) ─────────────────────────────────
+  // ─── RAG (stubs) ───────────────────────────────────
 
   ipcMain.handle('rag:index', safeHandle(async () => { return undefined }))
   ipcMain.handle('rag:query', safeHandle(async () => { return [] }))
@@ -256,13 +258,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('rag:listDocuments', safeHandle(async () => { return [] }))
   ipcMain.handle('rag:removeDocument', safeHandle(async () => { return undefined }))
 
-  // ─── Data (stubs) ────────────────────────────────
+  // ─── Data (stubs) ──────────────────────────────────
 
   ipcMain.handle('data:exportAll', safeHandle(async () => { return '' }))
   ipcMain.handle('data:importAll', safeHandle(async () => { return null }))
   ipcMain.handle('data:exportConversation', safeHandle(async () => { return undefined }))
 
-  // ─── File (stubs) ────────────────────────────────
+  // ─── File (stubs) ──────────────────────────────────
 
   ipcMain.handle('file:upload', safeHandle(async () => { return null }))
   ipcMain.handle('file:read', safeHandle(async (_, filePath: string) => {
@@ -271,7 +273,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   }))
   ipcMain.handle('file:uploadFolder', safeHandle(async () => { return [] }))
 
-  // ─── URL (stubs) ─────────────────────────────────
+  // ─── URL (stubs) ───────────────────────────────────
 
   ipcMain.handle('url:fetch', safeHandle(async () => { return '' }))
 }
