@@ -26,6 +26,7 @@ export function useStreaming() {
     }
     addMessageLocal(conversationId, assistantMsg)
 
+    // ── 1. Start stream — main process inits chunk buffer BEFORE firing LLM call
     let res: any
     try {
       res = await window.localmind.llm.startStream(request)
@@ -36,14 +37,19 @@ export function useStreaming() {
       return
     }
 
-    const streamId = res?.streamId ?? res?.data?.streamId
-    if (!streamId) {
-      updateStreamingMessage(conversationId, assistantMsg.id, 'Error: Failed to start stream')
+    // ── 2. Extract streamId — main process wraps response in ok({ streamId })
+    //    so shape is { success: true, data: { streamId } }
+    const streamId = res?.data?.streamId ?? res?.streamId
+    if (!streamId || res?.success === false) {
+      const errMsg = res?.error ?? 'Failed to start stream'
+      updateStreamingMessage(conversationId, assistantMsg.id, `Error: ${errMsg}`)
       finalizeStreamingMessage(conversationId, assistantMsg.id)
       setStreaming(false)
       return
     }
 
+    // ── 3. Attach IPC listeners BEFORE signalling readiness.
+    //    Main process buffers all chunks until we call llm:ready.
     const cleanup = window.localmind.llm.onChunk(streamId, (chunk: LLMStreamChunk) => {
       if (chunk.type === 'text' && chunk.content) {
         updateStreamingMessage(conversationId, assistantMsg.id, chunk.content)
@@ -73,6 +79,11 @@ export function useStreaming() {
       cleanup()
       cleanupRef.current = null
     })
+
+    // ── 4. Signal readiness — main process flushes buffered chunks now.
+    //    This guarantees we never miss chunks from slow cold-loading models
+    //    (e.g. gemma4:e4b takes ~34s to start the llama runner).
+    window.localmind.llm.signalReady(streamId)
   }, [addMessageLocal, updateStreamingMessage, finalizeStreamingMessage, setStreaming])
 
   const cancelStream = useCallback(() => {
