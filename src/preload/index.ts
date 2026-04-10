@@ -7,6 +7,13 @@ contextBridge.exposeInMainWorld('localmind', {
     cancelStream: (streamId: string) => ipcRenderer.invoke('llm:cancelStream', streamId),
     listModels: (provider: string) => ipcRenderer.invoke('llm:listModels', provider),
     estimateCost: (req: any) => ipcRenderer.invoke('llm:estimateCost', req),
+
+    // FIX: renderer calls this after all onChunk/onDone/onError listeners are
+    // attached. Main process holds buffered chunks until this signal arrives,
+    // preventing the race condition where slow model cold-load (e.g. gemma4:e4b
+    // ~34s startup) causes chunks to be sent before listeners are registered.
+    signalReady: (streamId: string) => ipcRenderer.send(`llm:ready:${streamId}`, streamId),
+
     onChunk: (streamId: string, cb: (chunk: any) => void) => {
       const channel = `llm:chunk:${streamId}`
       const handler = (_: any, chunk: any) => cb(chunk)
