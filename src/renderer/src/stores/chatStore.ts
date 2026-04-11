@@ -1,6 +1,18 @@
 import { create } from 'zustand'
 import { v4 as uuid } from 'uuid'
 
+// ---------------------------------------------------------------------------
+// Lightweight tagged logger -- every line is grep-able by [chatStore] prefix
+// ---------------------------------------------------------------------------
+const log = {
+  info:  (fn: string, msg: string, data?: unknown) =>
+    console.log(`[chatStore][${fn}] ${msg}`, data !== undefined ? data : ''),
+  warn:  (fn: string, msg: string, data?: unknown) =>
+    console.warn(`[chatStore][${fn}] [WARN] ${msg}`, data !== undefined ? data : ''),
+  error: (fn: string, msg: string, data?: unknown) =>
+    console.error(`[chatStore][${fn}] [ERROR] ${msg}`, data !== undefined ? data : ''),
+}
+
 export interface Message {
   id: string
   conversationId: string
@@ -48,74 +60,121 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   activeConversationId: null,
   isStreaming: false,
 
+  // -------------------------------------------------------------------------
   loadConversations: async () => {
+    log.info('loadConversations', 'Fetching conversations from DB')
     const res = await window.localmind.db.getConversations()
     if (res.success && res.data) {
+      log.info('loadConversations', 'Conversations loaded', { count: res.data.length, ids: res.data.map((c: Conversation) => c.id) })
       set({ conversations: res.data })
+    } else {
+      log.error('loadConversations', 'Failed to load conversations', res)
     }
   },
 
+  // -------------------------------------------------------------------------
   createConversation: async (data) => {
     const id = uuid()
     const now = Date.now()
+    log.info('createConversation', 'Creating new conversation', { id, modelId: data?.modelId, provider: data?.provider })
+
     const res = await window.localmind.db.createConversation({
       id,
       modelId: data?.modelId,
       provider: data?.provider,
     })
-    if (res.success) {
-      const conv: Conversation = {
-        id,
-        title: null,
-        modelId: data?.modelId ?? null,
-        provider: data?.provider ?? null,
-        starred: false,
-        createdAt: now,
-        updatedAt: now,
-      }
-      // Pre-seed the messages bucket so updateStreamingMessage never hits
-      // an undefined bucket on the very first message.
-      set((s) => ({
-        conversations: [conv, ...s.conversations],
-        activeConversationId: id,
-        messages: { ...s.messages, [id]: [] },
-      }))
-      console.log('[chatStore] createConversation -- messages bucket seeded', { id })
 
-      // Cleanup: remove any previous conversation that is CONFIRMED empty.
-      // A bucket being undefined means its messages were never loaded from DB
-      // (lazy load) -- we must NOT treat those as empty or we'll delete convs
-      // that have real messages.  Only prune when the bucket exists AND is [].
-      const prevEmpty = get().conversations.filter(
-        (c) => c.id !== id && get().messages[c.id] !== undefined && get().messages[c.id].length === 0
-      )
-      for (const empty of prevEmpty) {
-        // Fire-and-forget -- we don't await so the new conv is usable immediately
-        window.localmind.db.deleteConversation(empty.id).catch(() => {})
-        set((s) => ({
-          conversations: s.conversations.filter((c) => c.id !== empty.id),
-          messages: Object.fromEntries(
-            Object.entries(s.messages).filter(([k]) => k !== empty.id)
-          ),
-        }))
-        console.log('[chatStore] createConversation -- pruned empty conv', { id: empty.id })
-      }
+    if (!res.success) {
+      log.error('createConversation', 'DB createConversation failed', res)
+      return id
     }
+
+    const conv: Conversation = {
+      id,
+      title: null,
+      modelId: data?.modelId ?? null,
+      provider: data?.provider ?? null,
+      starred: false,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    // Seed the bucket BEFORE any prune logic so activeConversationId is
+    // never pointing at a conversation without a messages bucket.
+    set((s) => ({
+      conversations: [conv, ...s.conversations],
+      activeConversationId: id,
+      messages: { ...s.messages, [id]: [] },
+    }))
+    log.info('createConversation', 'New conv added to store & messages bucket seeded', { id })
+
+    // Prune: only delete conversations whose bucket is LOADED (not undefined)
+    // and confirmed empty.  undefined bucket = messages never fetched from DB
+    // = we cannot safely assume they have no messages.
+    const state = get()
+    const allConvs = state.conversations
+    const allBuckets = state.messages
+
+    log.info('createConversation', 'Evaluating candidates for empty-conv pruning', {
+      totalConvsInStore: allConvs.length,
+      loadedBuckets: Object.keys(allBuckets).length,
+    })
+
+    const prevEmpty = allConvs.filter((c) => {
+      if (c.id === id) return false                       // skip the new one
+      const bucket = allBuckets[c.id]
+      const bucketLoaded = bucket !== undefined
+      const bucketEmpty  = bucketLoaded && bucket.length === 0
+      log.info(
+        'createConversation',
+        `  conv ${c.id}: bucketLoaded=${bucketLoaded}, bucketLength=${bucket?.length ?? 'n/a'}, willPrune=${bucketEmpty}`,
+      )
+      return bucketEmpty
+    })
+
+    if (prevEmpty.length === 0) {
+      log.info('createConversation', 'No empty conversations to prune')
+    }
+
+    for (const empty of prevEmpty) {
+      log.warn('createConversation', 'Pruning confirmed-empty conversation', { id: empty.id })
+      window.localmind.db.deleteConversation(empty.id).catch((err: unknown) => {
+        log.error('createConversation', 'DB delete failed for pruned conv', { id: empty.id, err })
+      })
+      set((s) => ({
+        conversations: s.conversations.filter((c) => c.id !== empty.id),
+        messages: Object.fromEntries(
+          Object.entries(s.messages).filter(([k]) => k !== empty.id)
+        ),
+      }))
+      log.info('createConversation', 'Pruned empty conv removed from store', { id: empty.id })
+    }
+
     return id
   },
 
+  // -------------------------------------------------------------------------
   selectConversation: async (id) => {
+    log.info('selectConversation', 'Selecting conversation', { id })
     set({ activeConversationId: id })
     const { messages } = get()
     if (!messages[id]) {
+      log.info('selectConversation', 'No bucket in memory -- fetching messages from DB', { id })
       const res = await window.localmind.db.getMessages(id)
       if (res.success && res.data) {
+        log.info('selectConversation', 'Messages loaded from DB', { id, count: res.data.length })
         set((s) => ({ messages: { ...s.messages, [id]: res.data } }))
+      } else {
+        log.error('selectConversation', 'Failed to load messages from DB', { id, res })
       }
+    } else {
+      log.info('selectConversation', 'Bucket already in memory -- skipping DB fetch', { id, count: messages[id].length })
     }
   },
 
+  // -------------------------------------------------------------------------
   addMessageLocal: (convId, msg) => {
+    log.info('addMessageLocal', 'Adding message to local store only', { convId, messageId: msg.id, role: msg.role })
     set((s) => ({
       messages: {
         ...s.messages,
@@ -124,12 +183,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }))
   },
 
+  // -------------------------------------------------------------------------
   addMessage: async (msg) => {
     const message: Message = {
       ...msg,
       id: uuid(),
       createdAt: Date.now(),
     }
+    log.info('addMessage', 'Saving message to store + DB', { id: message.id, role: message.role, convId: msg.conversationId })
     set((s) => ({
       messages: {
         ...s.messages,
@@ -137,14 +198,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       },
     }))
     await window.localmind.db.saveMessage(message)
+    log.info('addMessage', 'Message persisted', { id: message.id })
     return message
   },
 
+  // -------------------------------------------------------------------------
   updateStreamingMessage: (convId, messageId, content) => {
     set((s) => {
       const msgs = s.messages[convId]
       if (!msgs) {
-        console.warn('[chatStore] updateStreamingMessage -- no bucket for convId', convId)
+        log.warn('updateStreamingMessage', 'No bucket found for convId -- chunk dropped', { convId, messageId })
         return s
       }
       return {
@@ -158,7 +221,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
 
+  // -------------------------------------------------------------------------
   finalizeStreamingMessage: (convId, messageId) => {
+    log.info('finalizeStreamingMessage', 'Finalizing streaming message', { convId, messageId })
     set((s) => {
       const msgs = s.messages[convId] ?? []
       return {
@@ -172,21 +237,33 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
 
+  // -------------------------------------------------------------------------
   deleteConversation: async (id) => {
+    log.warn('deleteConversation', 'Deleting conversation (user-initiated)', { id })
     await window.localmind.db.deleteConversation(id)
     set((s) => ({
       conversations: s.conversations.filter((c) => c.id !== id),
       messages: Object.fromEntries(Object.entries(s.messages).filter(([k]) => k !== id)),
       activeConversationId: s.activeConversationId === id ? null : s.activeConversationId,
     }))
+    log.info('deleteConversation', 'Conversation removed from store', { id })
   },
 
+  // -------------------------------------------------------------------------
   searchConversations: async (query) => {
+    log.info('searchConversations', 'Searching conversations', { query })
     const res = await window.localmind.db.searchConversations(query)
     if (res.success && res.data) {
+      log.info('searchConversations', 'Search results loaded', { count: res.data.length })
       set({ conversations: res.data })
+    } else {
+      log.error('searchConversations', 'Search failed', res)
     }
   },
 
-  setStreaming: (streaming) => set({ isStreaming: streaming }),
+  // -------------------------------------------------------------------------
+  setStreaming: (streaming) => {
+    log.info('setStreaming', `Streaming state -> ${streaming}`)
+    set({ isStreaming: streaming })
+  },
 }))
