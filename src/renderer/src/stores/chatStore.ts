@@ -73,15 +73,34 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         createdAt: now,
         updatedAt: now,
       }
-      // BUG FIX: pre-seed the messages array for this conversation so
-      // addMessageLocal and updateStreamingMessage find the right bucket
-      // immediately without waiting for a selectConversation db fetch.
+      // Pre-seed the messages bucket so updateStreamingMessage never hits
+      // an undefined bucket on the very first message.
       set((s) => ({
         conversations: [conv, ...s.conversations],
         activeConversationId: id,
         messages: { ...s.messages, [id]: [] },
       }))
       console.log('[chatStore] createConversation -- messages bucket seeded', { id })
+
+      // Cleanup: remove any previous empty (0-message) conversation from the
+      // store + DB AFTER the new conv is already active.  We do this here
+      // instead of in the IPC handler so activeConversationId is never null
+      // during the delete -- which previously caused ChatInput to unmount and
+      // destroyed the useStreaming hook instance mid-stream.
+      const prevEmpty = get().conversations.filter(
+        (c) => c.id !== id && (get().messages[c.id]?.length ?? 0) === 0
+      )
+      for (const empty of prevEmpty) {
+        // Fire-and-forget -- we don't await so the new conv is usable immediately
+        window.localmind.db.deleteConversation(empty.id).catch(() => {})
+        set((s) => ({
+          conversations: s.conversations.filter((c) => c.id !== empty.id),
+          messages: Object.fromEntries(
+            Object.entries(s.messages).filter(([k]) => k !== empty.id)
+          ),
+        }))
+        console.log('[chatStore] createConversation -- pruned empty conv', { id: empty.id })
+      }
     }
     return id
   },
@@ -101,9 +120,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((s) => ({
       messages: {
         ...s.messages,
-        // BUG FIX: use convId param, NOT s.activeConversationId.
-        // During fast re-send the active conv may have switched by the time
-        // the async chain reaches here, so we always key by explicit convId.
         [convId]: [...(s.messages[convId] ?? []), msg],
       },
     }))
@@ -128,8 +144,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   updateStreamingMessage: (convId, messageId, content) => {
     set((s) => {
       const msgs = s.messages[convId]
-      // BUG FIX: guard -- if the messages bucket for this conv doesn't exist
-      // yet (e.g. race on first message), skip silently instead of crashing.
       if (!msgs) {
         console.warn('[chatStore] updateStreamingMessage -- no bucket for convId', convId)
         return s

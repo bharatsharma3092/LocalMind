@@ -6,9 +6,12 @@ import type { LLMRequest } from '@shared/types/localmind-api'
 
 interface Props {
   conversationId: string
+  /** When true the input is inert — no conv is active yet. useStreaming hook stays
+   *  mounted so in-flight stream listeners are never destroyed. */
+  disabled?: boolean
 }
 
-export function ChatInput({ conversationId }: Props) {
+export function ChatInput({ conversationId, disabled = false }: Props) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { isStreaming, addMessage, messages } = useChatStore()
@@ -17,7 +20,8 @@ export function ChatInput({ conversationId }: Props) {
 
   const handleSend = useCallback(async () => {
     const content = input.trim()
-    if (!content || isStreaming) return
+    // Guard: no content, already streaming, no active conversation, or explicitly disabled
+    if (!content || isStreaming || !conversationId || disabled) return
 
     setInput('')
     if (textareaRef.current) {
@@ -49,7 +53,7 @@ export function ChatInput({ conversationId }: Props) {
     }
 
     await startStream(conversationId, request)
-  }, [input, isStreaming, conversationId, selectedModel, addMessage, startStream])
+  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -60,11 +64,12 @@ export function ChatInput({ conversationId }: Props) {
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value)
-    // Auto-resize
     const textarea = e.target
     textarea.style.height = 'auto'
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
   }
+
+  const isInert = disabled || !conversationId
 
   return (
     <div className="border-t border-border p-4">
@@ -75,10 +80,10 @@ export function ChatInput({ conversationId }: Props) {
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message... (Shift+Enter for newline)"
+            placeholder={isInert ? 'Start a conversation first...' : 'Type a message... (Shift+Enter for newline)'}
             rows={1}
-            className="flex-1 bg-transparent resize-none outline-none text-sm text-text placeholder:text-text-muted min-h-[24px] max-h-[200px]"
-            disabled={isStreaming}
+            className="flex-1 bg-transparent resize-none outline-none text-sm text-text placeholder:text-text-muted min-h-[24px] max-h-[200px] disabled:opacity-40"
+            disabled={isStreaming || isInert}
           />
           {isStreaming ? (
             <button
@@ -90,7 +95,7 @@ export function ChatInput({ conversationId }: Props) {
           ) : (
             <button
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={!input.trim() || isInert}
               className="shrink-0 px-3 py-1.5 bg-accent text-white rounded-lg text-xs font-medium hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Send
