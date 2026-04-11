@@ -60,19 +60,28 @@ export function useStreaming() {
       setStreaming(false)
       return
     }
-    log.info('Got streamId -- attaching chunk/done/error listeners', { streamId })
+    log.info('Got streamId -- attaching ALL listeners before signalReady', { streamId })
 
     // -- 3. Chunk counter + first-chunk tracker for reply visibility
     let chunkCount = 0
     let totalCharsReceived = 0
 
-    // -- 4. Attach IPC listeners BEFORE signalling readiness
+    // -------------------------------------------------------------------------
+    // CRITICAL ORDER: attach onChunk → onDone → onError → THEN signalReady.
+    //
+    // Previously signalReady was called after onChunk but before onDone/onError.
+    // Main process flushes the entire buffer (including the 'done' event) as
+    // soon as it receives the ready signal.  If the 'done' event was replayed
+    // before the onDone listener was registered it was silently dropped,
+    // leaving the stream permanently stuck with a blank reply.
+    // -------------------------------------------------------------------------
+
+    // -- 4a. Attach onChunk listener
     const cleanup = window.localmind.llm.onChunk(streamId, (chunk: LLMStreamChunk) => {
       if (chunk.type === 'text' && chunk.content) {
         chunkCount++
         totalCharsReceived += chunk.content.length
 
-        // Log first chunk explicitly so you can confirm LLM started replying
         if (chunkCount === 1) {
           log.info('>>> FIRST CHUNK received from LLM <<<', {
             streamId,
@@ -80,7 +89,6 @@ export function useStreaming() {
           })
         }
 
-        // Log every 20th chunk to show stream is alive without flooding console
         if (chunkCount % 20 === 0) {
           log.info(`Chunk #${chunkCount} received`, {
             streamId,
@@ -96,8 +104,8 @@ export function useStreaming() {
 
     cleanupRef.current = cleanup
 
+    // -- 4b. Attach onDone listener BEFORE signalReady
     window.localmind.llm.onDone(streamId, (usage: any) => {
-      // Read final assembled reply BEFORE finalizing
       const msgs = useChatStore.getState().messages[conversationId] ?? []
       const finalMsg = msgs.find((m) => m.id === assistantMsg.id)
       const replyLength = finalMsg?.content?.length ?? 0
@@ -108,8 +116,7 @@ export function useStreaming() {
         totalCharsReceived,
         replyLength,
         usage,
-        // Print first 300 chars of the reply so you can eyeball it in the console
-        replyPreview: finalMsg?.content?.slice(0, 300) ?? '(empty)',
+        replyPreview: finalMsg?.content?.slice(0, 300) ?? '(empty -- chunks may not have reached store)',
       })
 
       finalizeStreamingMessage(conversationId, assistantMsg.id)
@@ -126,6 +133,7 @@ export function useStreaming() {
       }
     })
 
+    // -- 4c. Attach onError listener BEFORE signalReady
     window.localmind.llm.onError(streamId, (err: string) => {
       log.error('>>> STREAM ERROR received from LLM <<<', {
         streamId,
@@ -139,9 +147,11 @@ export function useStreaming() {
       cleanupRef.current = null
     })
 
-    // -- 5. Signal readiness -- main process flushes buffered chunks now
-    log.info('Signalling ready to main process -- chunks will now flow', { streamId })
+    // -- 5. ALL listeners attached -- now safe to signal main process to flush buffer
+    log.info('All listeners attached -- signalling ready to main process', { streamId })
     window.localmind.llm.signalReady(streamId)
+    log.info('signalReady fired -- main process will now flush buffered chunks', { streamId })
+
   }, [addMessageLocal, updateStreamingMessage, finalizeStreamingMessage, setStreaming])
 
   const cancelStream = useCallback(() => {

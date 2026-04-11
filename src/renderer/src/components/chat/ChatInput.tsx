@@ -4,9 +4,18 @@ import { useProviderStore } from '../../stores/providerStore'
 import { useStreaming } from '../../hooks/useStreaming'
 import type { LLMRequest } from '@shared/types/localmind-api'
 
+// ---------------------------------------------------------------------------
+// Lightweight tagged logger -- grep by [ChatInput] in DevTools console
+// ---------------------------------------------------------------------------
+const log = {
+  info:  (fn: string, msg: string, data?: unknown) => console.log(`[ChatInput][${fn}] ${msg}`, data !== undefined ? data : ''),
+  warn:  (fn: string, msg: string, data?: unknown) => console.warn(`[ChatInput][${fn}] [WARN] ${msg}`, data !== undefined ? data : ''),
+  error: (fn: string, msg: string, data?: unknown) => console.error(`[ChatInput][${fn}] [ERROR] ${msg}`, data !== undefined ? data : ''),
+}
+
 interface Props {
   conversationId: string
-  /** When true the input is inert — no conv is active yet. useStreaming hook stays
+  /** When true the input is inert -- no conv is active yet. useStreaming hook stays
    *  mounted so in-flight stream listeners are never destroyed. */
   disabled?: boolean
 }
@@ -20,7 +29,6 @@ export function ChatInput({ conversationId, disabled = false }: Props) {
 
   const handleSend = useCallback(async () => {
     const content = input.trim()
-    // Guard: no content, already streaming, no active conversation, or explicitly disabled
     if (!content || isStreaming || !conversationId || disabled) return
 
     setInput('')
@@ -35,8 +43,7 @@ export function ChatInput({ conversationId, disabled = false }: Props) {
       content,
     })
 
-    // Build message list for LLM — read state AFTER addMessage resolves
-    // so the user message is guaranteed to be present in the store.
+    // Build message list for LLM -- read state AFTER addMessage resolves
     const allMessages = useChatStore.getState().messages[conversationId] ?? []
     const llmMessages = allMessages
       .filter((m) => !m.isStreaming)
@@ -51,6 +58,22 @@ export function ChatInput({ conversationId, disabled = false }: Props) {
       provider: (selectedModel?.provider as any) ?? 'ollama',
       stream: true,
     }
+
+    // ------------------------------------------------------------------
+    // LOG: show exactly what question + history is being sent to the LLM
+    // Grep by [ChatInput][handleSend] in DevTools console
+    // ------------------------------------------------------------------
+    log.info('handleSend', '>>> SENDING TO LLM <<<', {
+      model: request.model,
+      provider: request.provider,
+      totalMessages: llmMessages.length,
+      latestUserMessage: content,
+      fullHistory: llmMessages.map((m, i) => ({
+        index: i,
+        role: m.role,
+        contentPreview: m.content.slice(0, 200) + (m.content.length > 200 ? '...' : ''),
+      })),
+    })
 
     await startStream(conversationId, request)
   }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream])
