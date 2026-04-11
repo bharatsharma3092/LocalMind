@@ -24,19 +24,22 @@ export function ChatInput({ conversationId }: Props) {
       textareaRef.current.style.height = 'auto'
     }
 
-    // Save user message
-    await addMessage({
+    // Save user message and wait for it to be persisted + added to store
+    const userMsg = await addMessage({
       conversationId,
       role: 'user',
       content,
     })
 
-    // Build message list for LLM
+    // Build message list for LLM — read state AFTER addMessage resolves
+    // so the user message is guaranteed to be present in the store.
     const allMessages = useChatStore.getState().messages[conversationId] ?? []
-    const llmMessages = allMessages.map((m) => ({
-      role: m.role as 'system' | 'user' | 'assistant',
-      content: m.content,
-    }))
+    const llmMessages = allMessages
+      .filter((m) => !m.isStreaming)
+      .map((m) => ({
+        role: m.role as 'system' | 'user' | 'assistant',
+        content: m.content,
+      }))
 
     const request: LLMRequest = {
       messages: llmMessages,
