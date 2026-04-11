@@ -16,7 +16,7 @@ const activeStreams = new Map<string, AbortController>()
 
 export function registerIpcHandlers(win: BrowserWindow): void {
 
-  // ─── LLM ────────────────────────────────────────────────
+  // ─── LLM ───────────────────────────────────────────────────────────
 
   ipcMain.handle('llm:startStream', async (event, request: LLMRequest) => {
     const browserWin = BrowserWindow.fromWebContents(event.sender)
@@ -25,7 +25,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     const streamId = createStreamId()
     const controller = new AbortController()
     activeStreams.set(streamId, controller)
-    initStreamBuffer(streamId)
+    // FIX: pass browserWin so initStreamBuffer captures the correct window reference
+    // for buffer replay when the renderer signals llm:ready.
+    initStreamBuffer(streamId, browserWin)
 
     ;(async () => {
       try {
@@ -33,10 +35,8 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           if (controller.signal.aborted) break
           if (browserWin.isDestroyed()) break
 
-          // FIX: Route 'done' and 'error' chunk types to their dedicated IPC
+          // Route 'done' and 'error' chunk types to their dedicated IPC
           // channels so the renderer's onDone/onError listeners fire correctly.
-          // Previously ALL chunks went through sendChunk → llm:chunk:* so
-          // onDone (listening on llm:done:*) NEVER fired → stuck spinner.
           if (chunk.type === 'done') {
             sendDone(browserWin, streamId, chunk.usage ?? { promptTokens: 0, completionTokens: 0 })
           } else if (chunk.type === 'error') {
@@ -80,7 +80,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return { promptTokens, completionTokens: request.maxTokens ?? 1024 }
   }))
 
-  // ─── DB ─────────────────────────────────────────────────
+  // ─── DB ──────────────────────────────────────────────────────────
 
   ipcMain.handle('db:createConversation', safeHandle(async (_, data: any) => {
     const id = data.id ?? uuid()
@@ -169,7 +169,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return undefined
   }))
 
-  // ─── Settings ─────────────────────────────────────────
+  // ─── Settings ───────────────────────────────────────────────────
 
   ipcMain.handle('settings:get', safeHandle(async (_, key: string) => {
     return appStore.get(key as any)
@@ -204,7 +204,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return undefined
   }))
 
-  // ─── Secrets ───────────────────────────────────────────
+  // ─── Secrets ────────────────────────────────────────────────────
 
   ipcMain.handle('secrets:get', safeHandle(async (_, service: string) => {
     return await getSecret(service)
@@ -215,7 +215,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return undefined
   }))
 
-  // ─── MCP (stubs for Phase 1) ──────────────────────
+  // ─── MCP (stubs for Phase 1) ─────────────────────────────────
   ipcMain.handle('mcp:connect', safeHandle(async () => { return undefined }))
   ipcMain.handle('mcp:disconnect', safeHandle(async () => { return undefined }))
   ipcMain.handle('mcp:restart', safeHandle(async () => { return undefined }))
@@ -227,7 +227,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('mcp:listPrompts', safeHandle(async () => { return [] }))
   ipcMain.handle('mcp:getPrompt', safeHandle(async () => { return null }))
 
-  // ─── Skills (stubs) ───────────────────────────────
+  // ─── Skills (stubs) ────────────────────────────────────────
   ipcMain.handle('skill:list', safeHandle(async () => { return [] }))
   ipcMain.handle('skill:activate', safeHandle(async () => { return undefined }))
   ipcMain.handle('skill:run', safeHandle(async () => { return null }))
@@ -235,38 +235,38 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('skill:update', safeHandle(async () => { return undefined }))
   ipcMain.handle('skill:delete', safeHandle(async () => { return undefined }))
 
-  // ─── Artifacts (stubs) ────────────────────────────
+  // ─── Artifacts (stubs) ──────────────────────────────────────
   ipcMain.handle('artifact:save', safeHandle(async () => { return undefined }))
   ipcMain.handle('artifact:list', safeHandle(async () => { return [] }))
   ipcMain.handle('artifact:export', safeHandle(async () => { return '' }))
   ipcMain.handle('artifact:getVersions', safeHandle(async () => { return [] }))
 
-  // ─── Workspaces (stubs) ────────────────────────────
+  // ─── Workspaces (stubs) ─────────────────────────────────────
   ipcMain.handle('workspace:create', safeHandle(async () => { return undefined }))
   ipcMain.handle('workspace:list', safeHandle(async () => { return [] }))
   ipcMain.handle('workspace:update', safeHandle(async () => { return undefined }))
   ipcMain.handle('workspace:delete', safeHandle(async () => { return undefined }))
   ipcMain.handle('workspace:setActive', safeHandle(async () => { return undefined }))
 
-  // ─── Personas (stubs) ──────────────────────────────
+  // ─── Personas (stubs) ──────────────────────────────────────
   ipcMain.handle('persona:list', safeHandle(async () => { return [] }))
   ipcMain.handle('persona:create', safeHandle(async () => { return undefined }))
   ipcMain.handle('persona:update', safeHandle(async () => { return undefined }))
   ipcMain.handle('persona:delete', safeHandle(async () => { return undefined }))
 
-  // ─── RAG (stubs) ───────────────────────────────────
+  // ─── RAG (stubs) ───────────────────────────────────────────
   ipcMain.handle('rag:index', safeHandle(async () => { return undefined }))
   ipcMain.handle('rag:query', safeHandle(async () => { return [] }))
   ipcMain.handle('rag:status', safeHandle(async () => { return null }))
   ipcMain.handle('rag:listDocuments', safeHandle(async () => { return [] }))
   ipcMain.handle('rag:removeDocument', safeHandle(async () => { return undefined }))
 
-  // ─── Data (stubs) ──────────────────────────────────
+  // ─── Data (stubs) ──────────────────────────────────────────
   ipcMain.handle('data:exportAll', safeHandle(async () => { return '' }))
   ipcMain.handle('data:importAll', safeHandle(async () => { return null }))
   ipcMain.handle('data:exportConversation', safeHandle(async () => { return undefined }))
 
-  // ─── File (stubs) ──────────────────────────────────
+  // ─── File (stubs) ──────────────────────────────────────────
   ipcMain.handle('file:upload', safeHandle(async () => { return null }))
   ipcMain.handle('file:read', safeHandle(async (_, filePath: string) => {
     const fs = await import('fs/promises')
@@ -274,6 +274,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   }))
   ipcMain.handle('file:uploadFolder', safeHandle(async () => { return [] }))
 
-  // ─── URL (stubs) ───────────────────────────────────
+  // ─── URL (stubs) ──────────────────────────────────────────
   ipcMain.handle('url:fetch', safeHandle(async () => { return '' }))
 }
