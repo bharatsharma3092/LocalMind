@@ -82,13 +82,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }))
       console.log('[chatStore] createConversation -- messages bucket seeded', { id })
 
-      // Cleanup: remove any previous empty (0-message) conversation from the
-      // store + DB AFTER the new conv is already active.  We do this here
-      // instead of in the IPC handler so activeConversationId is never null
-      // during the delete -- which previously caused ChatInput to unmount and
-      // destroyed the useStreaming hook instance mid-stream.
+      // Cleanup: remove any previous conversation that is CONFIRMED empty.
+      // A bucket being undefined means its messages were never loaded from DB
+      // (lazy load) -- we must NOT treat those as empty or we'll delete convs
+      // that have real messages.  Only prune when the bucket exists AND is [].
       const prevEmpty = get().conversations.filter(
-        (c) => c.id !== id && (get().messages[c.id]?.length ?? 0) === 0
+        (c) => c.id !== id && get().messages[c.id] !== undefined && get().messages[c.id].length === 0
       )
       for (const empty of prevEmpty) {
         // Fire-and-forget -- we don't await so the new conv is usable immediately
