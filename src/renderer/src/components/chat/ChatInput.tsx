@@ -28,13 +28,60 @@ export function ChatInput({ conversationId, disabled = false }: Props) {
   const { startStream, cancelStream } = useStreaming()
 
   const handleSend = useCallback(async () => {
+    // -----------------------------------------------------------------------
+    // TRACE 1: raw input captured the moment Send is triggered
+    // -----------------------------------------------------------------------
+    log.info('handleSend', '>>> SEND TRIGGERED <<<', {
+      rawInput: input,
+      rawInputLength: input.length,
+      isStreaming,
+      conversationId,
+      disabled,
+      selectedModel: selectedModel?.id ?? '(none)',
+      selectedProvider: selectedModel?.provider ?? '(none)',
+    })
+
     const content = input.trim()
-    if (!content || isStreaming || !conversationId || disabled) return
+
+    // -----------------------------------------------------------------------
+    // TRACE 2: after trim -- shows exactly what will be sent (or why we bail)
+    // -----------------------------------------------------------------------
+    log.info('handleSend', 'After trim guard', {
+      trimmedContent: content,
+      trimmedLength: content.length,
+      willProceed: !!(content && !isStreaming && conversationId && !disabled),
+      guardChecks: {
+        hasContent: !!content,
+        notStreaming: !isStreaming,
+        hasConvId: !!conversationId,
+        notDisabled: !disabled,
+      },
+    })
+
+    if (!content || isStreaming || !conversationId || disabled) {
+      log.warn('handleSend', 'Guard failed -- aborting send', {
+        content: content || '(empty)',
+        isStreaming,
+        conversationId: conversationId || '(missing)',
+        disabled,
+      })
+      return
+    }
 
     setInput('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
+
+    // -----------------------------------------------------------------------
+    // TRACE 3: user message about to be persisted to DB + store
+    // -----------------------------------------------------------------------
+    log.info('handleSend', 'Calling addMessage for user turn', {
+      conversationId,
+      role: 'user',
+      contentPreview: content.slice(0, 300),
+      contentLength: content.length,
+    })
 
     // Save user message and wait for it to be persisted + added to store
     const userMsg = await addMessage({
@@ -43,14 +90,55 @@ export function ChatInput({ conversationId, disabled = false }: Props) {
       content,
     })
 
+    // -----------------------------------------------------------------------
+    // TRACE 4: addMessage resolved -- show what came back
+    // -----------------------------------------------------------------------
+    log.info('handleSend', 'addMessage resolved', {
+      savedMsgId: (userMsg as any)?.id ?? '(no id returned)',
+      savedRole: (userMsg as any)?.role ?? '(unknown)',
+      savedContentPreview: ((userMsg as any)?.content ?? '').slice(0, 200),
+    })
+
     // Build message list for LLM -- read state AFTER addMessage resolves
     const allMessages = useChatStore.getState().messages[conversationId] ?? []
+
+    // -----------------------------------------------------------------------
+    // TRACE 5: raw store snapshot before filtering
+    // -----------------------------------------------------------------------
+    log.info('handleSend', 'Raw store snapshot after addMessage', {
+      conversationId,
+      totalMessagesInStore: allMessages.length,
+      storeSnapshot: allMessages.map((m, i) => ({
+        index: i,
+        id: m.id,
+        role: m.role,
+        isStreaming: m.isStreaming ?? false,
+        contentLength: m.content?.length ?? 0,
+        contentPreview: (m.content ?? '').slice(0, 150),
+      })),
+    })
+
     const llmMessages = allMessages
       .filter((m) => !m.isStreaming)
       .map((m) => ({
         role: m.role as 'system' | 'user' | 'assistant',
         content: m.content,
       }))
+
+    // -----------------------------------------------------------------------
+    // TRACE 6: exact payload that will be handed to the LLM
+    // -----------------------------------------------------------------------
+    log.info('handleSend', '>>> FULL LLM PAYLOAD <<<', {
+      model: selectedModel?.id ?? 'qwen2.5:7b',
+      provider: selectedModel?.provider ?? 'ollama',
+      messageCount: llmMessages.length,
+      messages: llmMessages.map((m, i) => ({
+        index: i,
+        role: m.role,
+        contentLength: m.content?.length ?? 0,
+        content: m.content,          // full content -- NOT truncated
+      })),
+    })
 
     const request: LLMRequest = {
       messages: llmMessages,
@@ -59,28 +147,25 @@ export function ChatInput({ conversationId, disabled = false }: Props) {
       stream: true,
     }
 
-    // ------------------------------------------------------------------
-    // LOG: show exactly what question + history is being sent to the LLM
-    // Grep by [ChatInput][handleSend] in DevTools console
-    // ------------------------------------------------------------------
-    log.info('handleSend', '>>> SENDING TO LLM <<<', {
-      model: request.model,
-      provider: request.provider,
-      totalMessages: llmMessages.length,
-      latestUserMessage: content,
-      fullHistory: llmMessages.map((m, i) => ({
-        index: i,
-        role: m.role,
-        contentPreview: m.content.slice(0, 200) + (m.content.length > 200 ? '...' : ''),
-      })),
+    // -----------------------------------------------------------------------
+    // TRACE 7: calling startStream -- last renderer-side checkpoint
+    // -----------------------------------------------------------------------
+    log.info('handleSend', 'Calling startStream', {
+      streamModel: request.model,
+      streamProvider: request.provider,
+      streamMessageCount: request.messages.length,
+      lastUserMsg: request.messages.filter(m => m.role === 'user').at(-1)?.content ?? '(none)',
     })
 
     await startStream(conversationId, request)
+
+    log.info('handleSend', 'startStream awaited -- control returned to handleSend', { conversationId })
   }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      log.info('handleKeyDown', 'Enter pressed -- calling handleSend', { inputLength: input.length })
       handleSend()
     }
   }

@@ -13,8 +13,6 @@ import { countTokens } from './llm/token-counter'
 import type { LLMRequest } from './llm/types'
 
 // --- Logger ------------------------------------------------------------------
-// Lightweight tagged logger so every log line is grep-able by [IPC] prefix.
-// Uses only ASCII printable chars so Windows CP1252 consoles render correctly.
 const log = {
   info:  (tag: string, msg: string, data?: unknown) =>
     console.log(`[IPC][${tag}] ${msg}`, data !== undefined ? data : ''),
@@ -38,6 +36,25 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       messageCount: request.messages?.length,
     })
 
+    // -----------------------------------------------------------------------
+    // TRACE A: full messages array as received on the MAIN PROCESS side
+    // This is ground-truth -- if the question is missing here it never left
+    // the renderer; if it is present here but LLM ignores it, the bug is
+    // inside llmRouter / the provider adapter.
+    // -----------------------------------------------------------------------
+    log.info('startStream', '>>> FULL REQUEST PAYLOAD (main process) <<<', {
+      model: request.model,
+      provider: request.provider,
+      stream: request.stream,
+      messageCount: request.messages?.length ?? 0,
+      messages: (request.messages ?? []).map((m, i) => ({
+        index: i,
+        role: m.role,
+        contentLength: typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length,
+        content: m.content,          // full content -- NOT truncated
+      })),
+    })
+
     const browserWin = BrowserWindow.fromWebContents(event.sender)
     if (!browserWin) {
       log.error('startStream', 'BrowserWindow not found -- aborting stream')
@@ -54,39 +71,54 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     // STAGE 3 -- Fire async generator and return streamId immediately
     ;(async () => {
       let chunkCount = 0
-      let doneSent   = false   // FIX: guard against double sendDone
+      let doneSent   = false
       let totalTokens = { promptTokens: 0, completionTokens: 0 }
 
       log.info('startStream', 'Entering llmRouter.complete loop', { streamId })
 
-      try {
-        for await (const chunk of llmRouter.complete({ ...request, stream: true, signal: controller.signal })) {
+      // -----------------------------------------------------------------------
+      // TRACE B: the exact object handed to llmRouter.complete
+      // If TRACE A looks correct but TRACE B looks wrong, something mutates
+      // request between the two points.
+      // -----------------------------------------------------------------------
+      const routerRequest = { ...request, stream: true, signal: controller.signal }
+      log.info('startStream', '>>> PAYLOAD HANDED TO llmRouter.complete <<<', {
+        streamId,
+        model: routerRequest.model,
+        provider: routerRequest.provider,
+        messageCount: routerRequest.messages?.length ?? 0,
+        messages: (routerRequest.messages ?? []).map((m, i) => ({
+          index: i,
+          role: m.role,
+          contentLength: typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length,
+          content: m.content,        // full content -- NOT truncated
+        })),
+      })
 
-          // STAGE 4a -- Aborted mid-stream
+      try {
+        for await (const chunk of llmRouter.complete(routerRequest)) {
+
           if (controller.signal.aborted) {
             log.warn('startStream', 'Stream aborted mid-chunk -- breaking loop', { streamId, chunkCount })
             break
           }
 
-          // STAGE 4b -- Window destroyed mid-stream
           if (browserWin.isDestroyed()) {
             log.warn('startStream', 'BrowserWindow destroyed mid-stream -- breaking loop', { streamId, chunkCount })
             break
           }
 
-          // STAGE 5 -- Route chunk by type
           if (chunk.type === 'done') {
             totalTokens = chunk.usage ?? totalTokens
             log.info('startStream', 'Received done chunk -- sending to renderer', { streamId, usage: totalTokens, chunkCount })
             sendDone(browserWin, streamId, totalTokens)
-            doneSent = true   // FIX: mark done so fallback below does NOT fire
+            doneSent = true
           } else if (chunk.type === 'error') {
             const errMsg = (chunk as any).content ?? 'Unknown error'
             log.error('startStream', 'Received error chunk from provider', { streamId, error: errMsg })
             sendError(browserWin, streamId, errMsg)
           } else {
             chunkCount++
-            // Log every 20th text chunk to avoid flooding the console
             if (chunkCount === 1 || chunkCount % 20 === 0) {
               log.info('startStream', `Text chunk #${chunkCount} sent to renderer`, {
                 streamId,
@@ -98,7 +130,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           }
         }
 
-        // STAGE 6 -- Loop exhausted; only send fallback done if provider never sent one
         if (!doneSent && !controller.signal.aborted && !browserWin.isDestroyed()) {
           log.warn('startStream', 'Loop exited without provider done chunk -- sending fallback done', { streamId, chunkCount })
           sendDone(browserWin, streamId, totalTokens)
@@ -110,7 +141,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         }
 
       } catch (err: any) {
-        // STAGE 7 -- Unexpected exception inside the async generator
         log.error('startStream', 'Uncaught exception in stream loop', {
           streamId,
           error: err?.message ?? String(err),
@@ -120,14 +150,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           sendError(browserWin, streamId, err.message ?? 'Unknown error')
         }
       } finally {
-        // STAGE 8 -- Always clean up regardless of outcome
         activeStreams.delete(streamId)
         clearStreamBuffer(streamId)
         log.info('startStream', 'Stream cleaned up', { streamId, remainingActiveStreams: activeStreams.size })
       }
     })()
 
-    // STAGE 2 return -- renderer receives streamId before first chunk arrives
     log.info('startStream', 'Returning streamId to renderer', { streamId })
     return ok({ streamId })
   })
