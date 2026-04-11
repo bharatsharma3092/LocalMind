@@ -67,7 +67,7 @@ export function useStreaming() {
     let totalCharsReceived = 0
 
     // -------------------------------------------------------------------------
-    // CRITICAL ORDER: attach onChunk → onDone → onError → THEN signalReady.
+    // CRITICAL ORDER: attach onChunk -> onDone -> onError -> THEN signalReady.
     //
     // Previously signalReady was called after onChunk but before onDone/onError.
     // Main process flushes the entire buffer (including the 'done' event) as
@@ -106,28 +106,36 @@ export function useStreaming() {
 
     // -- 4b. Attach onDone listener BEFORE signalReady
     window.localmind.llm.onDone(streamId, (usage: any) => {
-      const msgs = useChatStore.getState().messages[conversationId] ?? []
-      const finalMsg = msgs.find((m) => m.id === assistantMsg.id)
-      const replyLength = finalMsg?.content?.length ?? 0
-
       log.info('>>> STREAM DONE -- Full LLM reply received <<<', {
         streamId,
         totalChunks: chunkCount,
         totalCharsReceived,
-        replyLength,
         usage,
-        replyPreview: finalMsg?.content?.slice(0, 300) ?? '(empty -- chunks may not have reached store)',
       })
 
+      // FIX: finalizeStreamingMessage MUST be called FIRST so that Zustand
+      // state is committed (isStreaming -> false) before we read it back.
+      // Reading getState() before this call risks capturing a stale snapshot
+      // where the last updateStreamingMessage batch hasn't been flushed yet.
       finalizeStreamingMessage(conversationId, assistantMsg.id)
       setStreaming(false)
       cleanup()
       cleanupRef.current = null
 
-      log.info('Persisting final assistant message to DB', { msgId: assistantMsg.id, replyLength })
+      // Read state AFTER finalize so content is fully accumulated
+      const msgs = useChatStore.getState().messages[conversationId] ?? []
+      const finalMsg = msgs.find((m) => m.id === assistantMsg.id)
+      const replyLength = finalMsg?.content?.length ?? 0
+
+      log.info('Persisting final assistant message to DB', {
+        msgId: assistantMsg.id,
+        replyLength,
+        replyPreview: finalMsg?.content?.slice(0, 300) ?? '(empty -- no message found in store)',
+      })
+
       if (finalMsg) window.localmind.db.saveMessage(finalMsg)
 
-      if (msgs.length <= 2) {
+      if (msgs.filter((m) => m.role !== 'system').length <= 2) {
         log.info('Auto-generating conversation title', { conversationId })
         window.localmind.db.generateTitle(conversationId)
       }
