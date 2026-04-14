@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 type Theme = 'light' | 'dark' | 'system'
+type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' | 'sunset' | 'gold' | 'copper'
 
 function applyThemeToDOM(theme: Theme) {
   const root = document.documentElement
@@ -14,17 +15,28 @@ function applyThemeToDOM(theme: Theme) {
   }
 }
 
+function applyColorToDOM(color: ColorTheme) {
+  const root = document.documentElement
+  root.removeAttribute('data-color')
+  if (color !== 'default') {
+    root.setAttribute('data-color', color)
+  }
+}
+
 interface SettingsStore {
   theme: Theme
+  colorTheme: ColorTheme
   privacyMode: boolean
   sidebarWidth: number
   setTheme: (theme: Theme) => void
+  setColorTheme: (color: ColorTheme) => void
   setPrivacyMode: (enabled: boolean) => void
   loadSettings: () => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsStore>((set) => ({
   theme: 'system',
+  colorTheme: 'default',
   privacyMode: false,
   sidebarWidth: 260,
   setTheme: async (theme) => {
@@ -32,6 +44,12 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     await window.localmind.settings.set('theme', theme)
     applyThemeToDOM(theme)
     set({ theme })
+  },
+  setColorTheme: async (color) => {
+    if (!window.localmind?.settings?.set) return
+    await window.localmind.settings.set('colorTheme', color)
+    applyColorToDOM(color)
+    set({ colorTheme: color })
   },
   setPrivacyMode: async (enabled) => {
     if (!window.localmind?.settings?.set) return
@@ -47,9 +65,12 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
       const res = await window.localmind.settings.getAll()
       if (res.success && res.data) {
         const theme = (res.data.theme as Theme) ?? 'system'
+        const colorTheme = (res.data.colorTheme as ColorTheme) ?? 'default'
         applyThemeToDOM(theme)
+        applyColorToDOM(colorTheme)
         set({
           theme,
+          colorTheme,
           privacyMode: res.data.privacyMode ?? false,
           sidebarWidth: res.data.sidebarWidth ?? 260,
         })

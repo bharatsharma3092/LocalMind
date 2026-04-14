@@ -345,12 +345,29 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return undefined
   }))
 
-  ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => {
-    if (!query) return await db.select().from(conversations).orderBy(desc(conversations.updatedAt))
-    return await db.select().from(conversations)
-      .where(like(conversations.title, `%${query}%`))
-      .orderBy(desc(conversations.updatedAt))
-  }))
+ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => {
+  if (!query) return await db.select().from(conversations).orderBy(desc(conversations.updatedAt))
+
+  const searchPattern = `%${query}%`
+  const titleResults = await db.select().from(conversations)
+    .where(like(conversations.title, searchPattern))
+    .orderBy(desc(conversations.updatedAt))
+
+  if (titleResults.length > 0) return titleResults
+
+  const messageResults = await db.select({ conv: conversations })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(like(messages.content, searchPattern))
+    .orderBy(desc(conversations.updatedAt))
+    .limit(50)
+
+  const uniqueConvs = messageResults.filter((r, i, arr) =>
+    arr.findIndex((a) => a.conv.id === r.conv.id) === i
+  ).map((r) => r.conv)
+
+  return uniqueConvs
+}))
 
   ipcMain.handle('db:generateTitle', safeHandle(async (_, convId: string) => {
     await generateConversationTitle(convId)

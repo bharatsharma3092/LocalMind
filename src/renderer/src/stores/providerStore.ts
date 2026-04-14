@@ -78,6 +78,25 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     await Promise.allSettled(
       providers.map((p) => get().refreshModels(p))
     )
+    try {
+      const res = await window.localmind.settings.get('customModels')
+      if (res.success && res.data && Array.isArray(res.data)) {
+        const customModelList: ModelInfo[] = res.data.map((m: any) => ({
+          id: m.id,
+          name: m.name ?? m.id,
+          provider: 'custom',
+          contextWindow: 4096,
+          supportsVision: false,
+          supportsToolUse: true,
+        }))
+        set((s) => ({
+          availableModels: [
+            ...s.availableModels.filter((m) => m.provider !== 'custom' || !customModelList.some((cm) => cm.id === m.id)),
+            ...customModelList.filter((cm) => !s.availableModels.some((m) => m.id === cm.id && m.provider === 'custom')),
+          ],
+        }))
+      }
+    } catch {}
   },
 
   setProviderStatus: (provider, status) => {

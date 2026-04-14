@@ -57,15 +57,15 @@ export class GoogleProvider implements LLMProvider {
       }
     }
 
-    if (request.tools && request.tools.length > 0) {
-      body.tools = [{
-        functionDeclarations: request.tools.map((t) => ({
-          name: t.function.name,
-          description: t.function.description,
-          parameters: t.function.parameters,
-        })),
-      }]
-    }
+if (request.tools && request.tools.length > 0) {
+    body.tools = [{
+      functionDeclarations: request.tools.map((t) => ({
+        name: t.function.name,
+        description: t.function.description ?? '',
+        parameters: t.function.parameters ?? { type: 'object', properties: {} },
+      })),
+    }]
+  }
 
     const url = `${this.baseUrl}/models/${request.model}${streamSuffix}?key=${apiKey}`
     console.log(`[Google] Request: ${request.model}, stream=${request.stream}, messages=${contents.length}, tools=${request.tools?.length ?? 0}`)

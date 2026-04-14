@@ -1,18 +1,11 @@
-import { useEffect } from 'react'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ModelSelector } from './ModelSelector'
 import { ContextBar } from './ContextBar'
 import { useChatStore } from '../../stores/chatStore'
-import { useProviderStore } from '../../stores/providerStore'
 
 export function ChatView() {
   const { activeConversationId, conversations, createConversation } = useChatStore()
-  const { refreshModels } = useProviderStore()
-
-  useEffect(() => {
-    refreshModels('ollama')
-  }, [refreshModels])
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId)
   const hasActiveConv = !!activeConversationId
