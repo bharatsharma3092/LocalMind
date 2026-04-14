@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, KeyboardEvent } from 'react'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useStreaming } from '../../hooks/useStreaming'
+import { SkillLauncher } from '../skills/SkillLauncher'
 import type { LLMRequest } from '@shared/types/localmind-api'
 
 // ---------------------------------------------------------------------------
@@ -22,6 +23,7 @@ interface Props {
 
 export function ChatInput({ conversationId, disabled = false }: Props) {
   const [input, setInput] = useState('')
+  const [showSkillLauncher, setShowSkillLauncher] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { isStreaming, addMessage, messages } = useChatStore()
   const { selectedModel } = useProviderStore()
@@ -171,7 +173,13 @@ export function ChatInput({ conversationId, disabled = false }: Props) {
   }
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value)
+    const value = e.target.value
+    setInput(value)
+    if (value === '/') {
+      setShowSkillLauncher(true)
+    } else if (showSkillLauncher && !value.startsWith('/')) {
+      setShowSkillLauncher(false)
+    }
     const textarea = e.target
     textarea.style.height = 'auto'
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
@@ -181,6 +189,19 @@ export function ChatInput({ conversationId, disabled = false }: Props) {
 
   return (
     <div className="border-t border-border p-4">
+      {showSkillLauncher && (
+        <SkillLauncher
+          onSelect={(skill) => {
+            setInput(`[${skill.name}] `)
+            setShowSkillLauncher(false)
+            textareaRef.current?.focus()
+          }}
+          onClose={() => {
+            setShowSkillLauncher(false)
+            if (input === '/') setInput('')
+          }}
+        />
+      )}
       <div className="max-w-3xl mx-auto">
         <div className="flex items-end gap-3 bg-surface-offset rounded-2xl border border-border p-3">
           <textarea

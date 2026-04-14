@@ -70,6 +70,15 @@ contextBridge.exposeInMainWorld('localmind', {
     serverStatus: () => ipcRenderer.invoke('mcp:serverStatus'),
     listPrompts: (serverId: string) => ipcRenderer.invoke('mcp:listPrompts', serverId),
     getPrompt: (serverId: string, promptName: string, args?: any) => ipcRenderer.invoke('mcp:getPrompt', serverId, promptName, args),
+    approveTool: (approvalId: string, decision: string) => ipcRenderer.invoke('mcp:approveTool', approvalId, decision),
+    onApprovalRequest: (cb: (data: any) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('mcp:approvalRequest', handler)
+    },
+    offApprovalRequest: (cb: any) => {
+      ipcRenderer.removeListener('mcp:approvalRequest', cb)
+    },
+    removeServer: (serverId: string) => ipcRenderer.invoke('mcp:removeServer', serverId),
   },
 
   skill: {

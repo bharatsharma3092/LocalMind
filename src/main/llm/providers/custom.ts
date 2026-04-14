@@ -1,10 +1,11 @@
 import type { LLMProvider, LLMRequest, LLMStreamChunk, ModelInfo } from '../types'
 import { mapProviderError } from '../router'
+import { getSecret } from '../../settings/secrets'
+import { appStore } from '../../settings/app-store'
 
 export class CustomProvider implements LLMProvider {
   private getBaseUrl(): string {
     try {
-      const { appStore } = require('../settings/app-store')
       return appStore.get('customProviderUrl') ?? 'http://localhost:8080/v1'
     } catch {
       return 'http://localhost:8080/v1'
@@ -12,7 +13,6 @@ export class CustomProvider implements LLMProvider {
   }
 
   private async getApiKey(): Promise<string | null> {
-    const { getSecret } = require('../../settings/secrets')
     return await getSecret('custom-api-key')
   }
 
@@ -22,16 +22,36 @@ export class CustomProvider implements LLMProvider {
 
     const body: any = {
       model: request.model,
-      messages: request.messages.map((m) => ({
-        role: m.role,
-        content: typeof m.content === 'string' ? m.content : m.content,
-        tool_call_id: m.toolCallId,
-      })),
+      messages: request.messages.map((m) => {
+        const msg: any = {
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : null,
+        }
+        if (m.toolCallId) msg.tool_call_id = m.toolCallId
+        if (m.toolCalls) {
+          msg.tool_calls = m.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: tc.arguments },
+          }))
+        }
+        return msg
+      }),
       stream: request.stream,
     }
 
     if (request.temperature != null) body.temperature = request.temperature
     if (request.maxTokens != null) body.max_tokens = request.maxTokens
+    if (request.tools) {
+      body.tools = request.tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters,
+        },
+      }))
+    }
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
@@ -44,7 +64,9 @@ export class CustomProvider implements LLMProvider {
     })
 
     if (!response.ok) {
-      throw new Error(mapProviderError(response.status, 'Custom Provider'))
+      const errorBody = await response.text().catch(() => '')
+      console.error(`[Custom] API error ${response.status}: ${errorBody}`)
+      throw new Error(mapProviderError(response.status, 'Custom Provider') + (errorBody ? `: ${errorBody}` : ''))
     }
 
     if (request.stream && response.body) {
@@ -72,6 +94,18 @@ export class CustomProvider implements LLMProvider {
             const parsed = JSON.parse(data)
             const delta = parsed.choices?.[0]?.delta
             if (delta?.content) yield { type: 'text', content: delta.content }
+            if (delta?.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                yield {
+                  type: 'tool_call',
+                  toolCall: {
+                    id: tc.id ?? '',
+                    name: tc.function?.name ?? '',
+                    arguments: tc.function?.arguments ?? '',
+                  },
+                }
+              }
+            }
           } catch {
             // skip malformed JSON
           }
@@ -81,6 +115,18 @@ export class CustomProvider implements LLMProvider {
       const data = await response.json()
       const content = data.choices?.[0]?.message?.content
       if (content) yield { type: 'text', content }
+      if (data.choices?.[0]?.message?.tool_calls) {
+        for (const tc of data.choices[0].message.tool_calls) {
+          yield {
+            type: 'tool_call',
+            toolCall: {
+              id: tc.id ?? '',
+              name: tc.function?.name ?? '',
+              arguments: tc.function?.arguments ?? '',
+            },
+          }
+        }
+      }
       yield {
         type: 'done',
         usage: {

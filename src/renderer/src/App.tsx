@@ -4,6 +4,8 @@ import { ChatView } from './components/chat/ChatView'
 import { ToastContainer } from './components/ui/ToastContainer'
 import { SettingsPage } from './components/settings/SettingsPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { ArtifactPanel } from './components/artifacts/ArtifactPanel'
+import { McpPermissionDialog } from './components/mcp/McpPermissionDialog'
 import { useUIStore } from './stores/uiStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { useProviderStore } from './stores/providerStore'
@@ -11,13 +13,13 @@ import { useProviderStore } from './stores/providerStore'
 function App() {
   const { sidebarOpen, toggleSidebar } = useUIStore()
   const { loadSettings } = useSettingsStore()
-  const { refreshModels } = useProviderStore()
+  const { refreshAllModels } = useProviderStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     loadSettings()
-    refreshModels('ollama')
-  }, [loadSettings, refreshModels])
+    refreshAllModels()
+  }, [loadSettings, refreshAllModels])
 
   return (
     <ErrorBoundary>
@@ -45,7 +47,9 @@ function App() {
           </div>
           <ChatView />
         </div>
+        <ArtifactPanel />
         <ToastContainer />
+        <McpPermissionDialog />
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}
       </div>
     </ErrorBoundary>

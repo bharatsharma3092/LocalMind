@@ -17,7 +17,7 @@ export function mapProviderError(status: number, provider: string): string {
   return map[status] ?? `Unexpected error from ${provider} (HTTP ${status})`
 }
 
-class LLMRouter {
+export class LLMRouter {
   private providers = new Map<ProviderType, LLMProvider>()
 
   constructor() {

@@ -8,19 +8,34 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async *complete(request: LLMRequest): AsyncIterable<LLMStreamChunk> {
-    const body = {
-      model: request.model,
-      messages: request.messages.map((m) => ({
+    const messages = request.messages.map((m) => {
+      const msg: any = {
         role: m.role,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-        tool_calls: m.toolCalls,
-        tool_call_id: m.toolCallId,
-      })),
+      }
+      if (m.toolCallId) msg.tool_call_id = m.toolCallId
+      if (m.toolCalls) {
+        msg.tool_calls = m.toolCalls.map((tc) => {
+          let args: any = tc.arguments
+          try { args = JSON.parse(tc.arguments) } catch {}
+          return {
+            function: { name: tc.name, arguments: args },
+          }
+        })
+        if (msg.content === null || msg.content === '') msg.content = ''
+      }
+      return msg
+    })
+
+    const body: any = {
+      model: request.model,
+      messages,
       stream: request.stream,
-      options: {
-        temperature: request.temperature,
-        num_predict: request.maxTokens,
-      },
+    }
+
+    if (request.temperature != null) body.options = { temperature: request.temperature }
+    if (request.maxTokens != null) {
+      body.options = { ...body.options, num_predict: request.maxTokens }
     }
 
     if (request.tools) {
@@ -42,7 +57,9 @@ export class OllamaProvider implements LLMProvider {
     })
 
     if (!response.ok) {
-      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`)
+      const errorBody = await response.text().catch(() => '')
+      console.error(`[Ollama] API error ${response.status}: ${errorBody}`)
+      throw new Error(`Ollama API error: ${response.status} ${response.statusText}${errorBody ? `: ${errorBody}` : ''}`)
     }
 
     if (request.stream && response.body) {

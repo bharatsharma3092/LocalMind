@@ -1,5 +1,6 @@
 import type { LLMProvider, LLMRequest, LLMStreamChunk, ModelInfo } from '../types'
 import { mapProviderError } from '../router'
+import { getSecret } from '../../settings/secrets'
 
 export class OpenAIProvider implements LLMProvider {
   private baseUrl: string
@@ -9,7 +10,6 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   private async getApiKey(): Promise<string> {
-    const { getSecret } = require('../../settings/secrets')
     const key = await getSecret('openai-api-key')
     if (!key) throw new Error('No OpenAI API key configured. Add one in Settings → Providers.')
     return key
@@ -20,18 +20,22 @@ export class OpenAIProvider implements LLMProvider {
 
     const body: any = {
       model: request.model,
-      messages: request.messages.map((m) => ({
-        role: m.role,
-        content: typeof m.content === 'string'
-          ? m.content
-          : m.content,
-        tool_call_id: m.toolCallId,
-        tool_calls: m.toolCalls?.map((tc) => ({
-          id: tc.id,
-          type: 'function',
-          function: { name: tc.name, arguments: tc.arguments },
-        })),
-      })),
+      messages: request.messages.map((m) => {
+        const msg: any = {
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : null,
+        }
+        if (m.toolCallId) msg.tool_call_id = m.toolCallId
+        if (m.toolCalls) {
+          msg.tool_calls = m.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: tc.arguments },
+          }))
+          if (msg.content === null) msg.content = null
+        }
+        return msg
+      }),
       stream: request.stream,
     }
 
