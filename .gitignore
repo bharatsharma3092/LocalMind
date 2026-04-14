@@ -3,3 +3,7 @@ out/
 dist/
 *.db
 .env
+.kilo/
+resources/
+NUL
+tsconfig.tsbuildinfo
