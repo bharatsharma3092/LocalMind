@@ -255,62 +255,61 @@ export function McpConfigEditor() {
                 </p>
               </div>
             </div>
-            <div className="flex gap-1 flex-shrink-0">
-              {server.status === 'connected' ? (
-                <>
-                  <button
-                    onClick={() => handleRestart(server.id)}
-                    className="p-1.5 rounded-lg hover:bg-surface text-text-muted hover:text-text transition-colors"
-                    title="Restart"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => handleDisconnect(server.id)}
-                    className="p-1.5 rounded-lg hover:bg-surface text-text-muted hover:text-danger transition-colors"
-                    title="Disconnect"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    onClick={async () => {
-                      try {
-                        await window.localmind.mcp.restart(server.id)
-                        refresh()
-                      } catch {
-                        try {
-                          await window.localmind.mcp.connect({ id: server.id, name: server.name })
-                          refresh()
-                        } catch {}
-                      }
-                    }}
-                    className="px-2.5 py-1 bg-accent text-white rounded-lg text-xs hover:bg-accent-hover transition-colors"
-                  >
-                    Connect
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (window.localmind.mcp.removeServer) {
-                        await window.localmind.mcp.removeServer(server.id)
-                        refresh()
-                      }
-                    }}
-                    className="p-1.5 rounded-lg hover:bg-surface text-text-muted hover:text-danger transition-colors"
-                    title="Remove"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                </>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              {server.status === 'connected' && (
+                <button
+                  onClick={() => handleRestart(server.id)}
+                  className="p-1.5 rounded-lg hover:bg-surface text-text-muted hover:text-text transition-colors"
+                  title="Restart"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
               )}
+              {server.status !== 'connected' && server.status !== 'connecting' && (
+                <button
+                  onClick={async () => {
+                    if (window.localmind.mcp.removeServer) {
+                      await window.localmind.mcp.removeServer(server.id)
+                      refresh()
+                    }
+                  }}
+                  className="p-1.5 rounded-lg hover:bg-surface text-text-muted hover:text-danger transition-colors"
+                  title="Remove"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              )}
+              <div
+                onClick={async () => {
+                  if (server.status === 'connecting') return;
+                  if (server.status === 'connected') {
+                    await handleDisconnect(server.id)
+                  } else {
+                    try {
+                      await window.localmind.mcp.restart(server.id)
+                      refresh()
+                    } catch {
+                      try {
+                        await window.localmind.mcp.connect({ id: server.id, name: server.name })
+                        refresh()
+                      } catch {}
+                    }
+                  }
+                }}
+                className={`w-10 h-6 rounded-full relative transition-colors ${server.status === 'connecting' ? 'cursor-wait opacity-50' : 'cursor-pointer'} ${
+                  server.status === 'connected' ? 'bg-accent' : 'bg-surface-offset border border-border'
+                }`}
+              >
+                <div
+                  className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                    server.status === 'connected' ? 'translate-x-5' : 'translate-x-1'
+                  }`}
+                />
+              </div>
             </div>
           </div>
         ))}

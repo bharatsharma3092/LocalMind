@@ -1,72 +1,116 @@
+import { useEffect } from 'react'
 import { ConversationList } from './ConversationList'
 import { useChatStore } from '../../stores/chatStore'
-import { useUIStore } from '../../stores/uiStore'
+import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { useRagStore } from '../../stores/ragStore'
+
+export type AppPage = 'chat' | 'mcp' | 'skills' | 'settings'
 
 interface Props {
+  currentPage: AppPage
+  onNavigate: (page: AppPage) => void
   onSettingsClick: () => void
 }
 
-export function Sidebar({ onSettingsClick }: Props) {
+type NavItem = {
+  id: AppPage
+  label: string
+  icon: string
+}
+
+const mainNav: NavItem[] = [
+  { id: 'chat', label: 'Conversations', icon: 'forum' },
+  { id: 'skills', label: 'Skills', icon: 'psychology' },
+  { id: 'mcp', label: 'MCP Servers', icon: 'hub' },
+]
+
+const footerNav = [
+  { id: 'settings' as AppPage, label: 'Settings', icon: 'settings' },
+]
+
+export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
   const { createConversation } = useChatStore()
-  const { sidebarOpen, toggleSidebar } = useUIStore()
+  const { loadWorkspaces } = useWorkspaceStore()
+  const { loadDocuments, loadStatus } = useRagStore()
+
+  useEffect(() => {
+    loadWorkspaces()
+    loadDocuments()
+    loadStatus()
+  }, [loadWorkspaces, loadDocuments, loadStatus])
 
   return (
-    <div
-      className={`shrink-0 h-full bg-surface border-r border-border flex flex-col transition-all duration-300 ease-in-out overflow-hidden ${
-        sidebarOpen ? 'w-[260px]' : 'w-[52px]'
-      }`}
-    >
-      <div className="p-3 border-b border-border">
-        {sidebarOpen ? (
-          <button
-            onClick={() => createConversation()}
-            className="w-full btn-primary text-sm py-2.5"
+    <nav className="fixed left-0 top-0 h-full w-[260px] border-r border-outline-variant bg-surface-container-lowest flex flex-col py-4 z-40 hidden md:flex">
+      {/* Header */}
+      <div className="px-6 mb-8 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary-container/20 flex items-center justify-center text-primary-container">
+          <span
+            className="material-symbols-outlined font-black text-[20px]"
+            style={{ fontVariationSettings: "'FILL' 1" }}
           >
-            + New Conversation
-          </button>
-        ) : (
-          <button
-            onClick={() => createConversation()}
-            className="w-full flex items-center justify-center py-2.5 rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
-            title="New Conversation"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-          </button>
-        )}
+            psychology
+          </span>
+        </div>
+        <div>
+          <h1 className="text-primary-container font-black text-[20px] tracking-tight leading-tight">LocalMind</h1>
+          <p className="text-[12px] text-on-surface-variant uppercase tracking-wider font-semibold leading-none mt-0.5">Privacy First AI</p>
+        </div>
       </div>
 
-      <div className={`flex-1 min-h-0 ${sidebarOpen ? '' : 'hidden'}`}>
-        <ConversationList />
+      {/* CTA */}
+      <div className="px-4 mb-6">
+        <button
+          onClick={() => createConversation()}
+          className="w-full bg-primary-container text-white hover:bg-accent-hover transition-colors duration-200 py-3 rounded-lg flex items-center justify-center gap-2 font-semibold text-[14px] shadow-sm"
+        >
+          <span className="material-symbols-outlined text-[18px]">add</span>
+          New Chat
+        </button>
       </div>
 
-      <div className="p-3 border-t border-border flex items-center gap-2">
+      {/* Main Tabs */}
+      <div className="px-2 space-y-1">
+        {mainNav.map((item) => {
+          const isActive = currentPage === item.id
+          return (
+            <button
+              key={item.id}
+              onClick={() => onNavigate(item.id)}
+              className={`w-full flex items-center py-3 px-4 text-[12px] uppercase tracking-widest font-bold transition-all duration-200 hover:translate-x-1 ${
+                isActive
+                  ? 'text-accent bg-accent/10 border-l-4 border-primary-container'
+                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high/40 border-l-4 border-transparent'
+              }`}
+            >
+              <span className="material-symbols-outlined mr-3 text-[20px]">{item.icon}</span>
+              {item.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Conversation list when Chat tab is active */}
+      {currentPage === 'chat' && (
+        <div className="flex-1 min-h-0 overflow-hidden mt-2 px-2">
+          <div className="h-full overflow-y-auto">
+            <ConversationList />
+          </div>
+        </div>
+      )}
+
+      {/* Spacer for other tabs */}
+      {currentPage !== 'chat' && <div className="flex-1" />}
+
+      {/* Footer Tabs */}
+      <div className="mt-auto px-2 space-y-1 pt-4 border-t border-outline-variant/50">
         <button
           onClick={onSettingsClick}
-          className="p-2 rounded-lg hover:bg-surface-offset text-text-muted hover:text-text transition-colors"
-          title="Settings"
+          className="w-full flex items-center text-on-surface-variant hover:text-on-surface py-3 px-4 text-[12px] uppercase tracking-widest font-bold hover:bg-surface-container-high/40 transition-all hover:translate-x-1 duration-200"
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
+          <span className="material-symbols-outlined mr-3 text-[20px]">settings</span>
+          Settings
         </button>
-
-        <button
-          onClick={toggleSidebar}
-          className="p-2 rounded-lg hover:bg-surface-offset text-text-muted hover:text-text transition-colors"
-          title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-        >
-          <svg className={`w-5 h-5 transition-transform ${sidebarOpen ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-          </svg>
-        </button>
-
-        {sidebarOpen && (
-          <span className="text-xs text-text-muted ml-auto">LocalMind v1.0</span>
-        )}
       </div>
-    </div>
+    </nav>
   )
 }

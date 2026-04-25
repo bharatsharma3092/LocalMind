@@ -8,6 +8,13 @@ export interface IPCResponse<T = void> {
 // ─── LLM ──────────────────────────────────────────
 export type ProviderType = 'ollama' | 'openrouter' | 'google' | 'openai' | 'custom'
 
+export interface CustomProviderConfig {
+  id: string
+  name: string
+  baseUrl: string
+  models: { id: string; name: string }[]
+}
+
 export interface TokenUsage {
   promptTokens: number
   completionTokens: number
@@ -45,6 +52,7 @@ export interface LLMRequest {
   messages: LLMMessage[]
   model: string
   provider: ProviderType
+  customProviderId?: string
   tools?: ToolDefinition[]
   stream: boolean
   signal?: AbortSignal
@@ -63,6 +71,7 @@ export interface ModelInfo {
   id: string
   name: string
   provider: ProviderType
+  customProviderId?: string
   contextWindow: number
   costPer1MTokens?: { input: number; output: number }
   supportsVision: boolean
@@ -89,7 +98,7 @@ export interface DbApi {
   deleteMessagesAfter: (convId: string, messageId: string) => Promise<IPCResponse<void>>
   deleteConversation: (convId: string) => Promise<IPCResponse<void>>
   searchConversations: (query: string) => Promise<IPCResponse<any[]>>
-  generateTitle: (convId: string) => Promise<IPCResponse<void>>
+  generateTitle: (convId: string) => Promise<IPCResponse<string | null>>
 }
 
 export interface McpApi {
@@ -103,6 +112,7 @@ export interface McpApi {
   serverStatus: () => Promise<IPCResponse<any>>
   listPrompts: (serverId: string) => Promise<IPCResponse<any[]>>
   getPrompt: (serverId: string, promptName: string, args?: any) => Promise<IPCResponse<any>>
+  listSaved: () => Promise<IPCResponse<any[]>>
 }
 
 export interface SettingsApi {

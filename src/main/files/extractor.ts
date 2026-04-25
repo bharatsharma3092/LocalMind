@@ -18,7 +18,7 @@ export async function extractFileContent(filePath: string): Promise<ExtractedCon
     const buffer = await readFile(filePath)
     return {
       filename,
-      text: '',
+      text: buffer.toString('base64'),
       mimeType: `image/${ext === '.jpg' ? 'jpeg' : ext.slice(1)}`,
       isImage: true,
       extension: ext,

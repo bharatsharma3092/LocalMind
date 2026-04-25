@@ -52,6 +52,8 @@ interface ChatStore {
   deleteConversation: (id: string) => Promise<void>
   searchConversations: (query: string) => Promise<void>
   setStreaming: (streaming: boolean) => void
+  updateConversationTitle: (convId: string, title: string) => void
+  toggleStarred: (convId: string) => Promise<void>
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -67,6 +69,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (res.success && res.data) {
       log.info('loadConversations', 'Conversations loaded', { count: res.data.length, ids: res.data.map((c: Conversation) => c.id) })
       set({ conversations: res.data })
+
+      for (const conv of res.data) {
+        if (!conv.title) {
+          window.localmind.db.generateTitle(conv.id).then((titleRes) => {
+            if (titleRes.success && titleRes.data) {
+              useChatStore.getState().updateConversationTitle(conv.id, titleRes.data!)
+            }
+          }).catch(() => {})
+        }
+      }
     } else {
       log.error('loadConversations', 'Failed to load conversations', res)
     }
@@ -199,6 +211,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }))
     await window.localmind.db.saveMessage(message)
     log.info('addMessage', 'Message persisted', { id: message.id })
+
+    // Auto-update conversation title from first user message
+    if (msg.role === 'user') {
+      const state = get()
+      const conv = state.conversations.find((c) => c.id === msg.conversationId)
+      if (conv && !conv.title) {
+        const title = msg.content.replace(/\n/g, ' ').trim().slice(0, 60)
+        if (title) {
+          log.info('addMessage', 'Auto-setting conversation title from first user message', { convId: msg.conversationId, title })
+          get().updateConversationTitle(msg.conversationId, title)
+          window.localmind.db.updateConversation(msg.conversationId, { title }).catch(() => {})
+        }
+      }
+    }
+
     return message
   },
 
@@ -265,5 +292,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setStreaming: (streaming) => {
     log.info('setStreaming', `Streaming state -> ${streaming}`)
     set({ isStreaming: streaming })
+  },
+
+  // -------------------------------------------------------------------------
+  updateConversationTitle: (convId, title) => {
+    log.info('updateConversationTitle', 'Updating title', { convId, title })
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, title } : c
+      ),
+    }))
+  },
+
+  toggleStarred: async (convId) => {
+    const conv = get().conversations.find((c) => c.id === convId)
+    if (!conv) return
+    const newStarred = !conv.starred
+    await window.localmind.db.updateConversation(convId, { starred: newStarred })
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, starred: newStarred } : c
+      ),
+    }))
   },
 }))

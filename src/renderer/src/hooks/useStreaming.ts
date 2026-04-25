@@ -4,9 +4,6 @@ import { useChatStore } from '../stores/chatStore'
 import type { Message } from '../stores/chatStore'
 import type { LLMStreamChunk, LLMRequest } from '@shared/types/localmind-api'
 
-// ---------------------------------------------------------------------------
-// Lightweight tagged logger -- grep by [useStreaming] in DevTools console
-// ---------------------------------------------------------------------------
 const log = {
   info:  (msg: string, data?: unknown) => console.log(`[useStreaming] ${msg}`,  data !== undefined ? data : ''),
   warn:  (msg: string, data?: unknown) => console.warn(`[useStreaming] [WARN] ${msg}`, data !== undefined ? data : ''),
@@ -15,7 +12,22 @@ const log = {
 
 export function useStreaming() {
   const { addMessageLocal, updateStreamingMessage, finalizeStreamingMessage, setStreaming } = useChatStore()
-  const cleanupRef = useRef<(() => void) | null>(null)
+  const streamIdRef = useRef<string | null>(null)
+  const chunkCleanupRef = useRef<(() => void) | null>(null)
+  const doneCleanupRef = useRef<(() => void) | null>(null)
+  const errorCleanupRef = useRef<(() => void) | null>(null)
+  const assistantMsgRef = useRef<{ id: string; conversationId: string } | null>(null)
+
+  const cleanupAllListeners = useCallback(() => {
+    chunkCleanupRef.current?.()
+    chunkCleanupRef.current = null
+    doneCleanupRef.current?.()
+    doneCleanupRef.current = null
+    errorCleanupRef.current?.()
+    errorCleanupRef.current = null
+    streamIdRef.current = null
+    assistantMsgRef.current = null
+  }, [])
 
   const startStream = useCallback(async (
     conversationId: string,
@@ -23,6 +35,8 @@ export function useStreaming() {
     onToken?: (token: string) => void
   ) => {
     log.info('startStream called', { conversationId, model: request.model, provider: request.provider, messageCount: request.messages?.length })
+
+    cleanupAllListeners()
     setStreaming(true)
 
     const assistantMsg: Message = {
@@ -35,9 +49,9 @@ export function useStreaming() {
       isStreaming: true,
     }
     addMessageLocal(conversationId, assistantMsg)
+    assistantMsgRef.current = { id: assistantMsg.id, conversationId }
     log.info('Assistant placeholder added to store', { msgId: assistantMsg.id, conversationId })
 
-    // -- 1. Start stream on main process
     let res: any
     try {
       res = await window.localmind.llm.startStream(request)
@@ -47,10 +61,10 @@ export function useStreaming() {
       updateStreamingMessage(conversationId, assistantMsg.id, `Error: ${err?.message ?? 'Failed to start stream'}`)
       finalizeStreamingMessage(conversationId, assistantMsg.id)
       setStreaming(false)
+      cleanupAllListeners()
       return
     }
 
-    // -- 2. Extract streamId
     const streamId = res?.data?.streamId ?? res?.streamId
     if (!streamId || res?.success === false) {
       const errMsg = res?.error ?? 'Failed to start stream'
@@ -58,26 +72,28 @@ export function useStreaming() {
       updateStreamingMessage(conversationId, assistantMsg.id, `Error: ${errMsg}`)
       finalizeStreamingMessage(conversationId, assistantMsg.id)
       setStreaming(false)
+      cleanupAllListeners()
       return
     }
+    streamIdRef.current = streamId
     log.info('Got streamId -- attaching ALL listeners before signalReady', { streamId })
 
-    // -- 3. Chunk counter + first-chunk tracker for reply visibility
     let chunkCount = 0
     let totalCharsReceived = 0
+    let listenersCleaned = false
+
+    const cleanupOnce = () => {
+      if (listenersCleaned) return
+      listenersCleaned = true
+      cleanupAllListeners()
+    }
 
     // -------------------------------------------------------------------------
     // CRITICAL ORDER: attach onChunk -> onDone -> onError -> THEN signalReady.
-    //
-    // Previously signalReady was called after onChunk but before onDone/onError.
-    // Main process flushes the entire buffer (including the 'done' event) as
-    // soon as it receives the ready signal.  If the 'done' event was replayed
-    // before the onDone listener was registered it was silently dropped,
-    // leaving the stream permanently stuck with a blank reply.
     // -------------------------------------------------------------------------
 
-    // -- 4a. Attach onChunk listener
-    const cleanup = window.localmind.llm.onChunk(streamId, (chunk: LLMStreamChunk) => {
+    // -- onChunk listener
+    const chunkCleanup = window.localmind.llm.onChunk(streamId, (chunk: LLMStreamChunk) => {
       if (chunk.type === 'text' && chunk.content) {
         chunkCount++
         totalCharsReceived += chunk.content.length
@@ -101,28 +117,21 @@ export function useStreaming() {
         onToken?.(chunk.content)
       }
     })
+    chunkCleanupRef.current = chunkCleanup
 
-    cleanupRef.current = cleanup
-
-    // -- 4b. Attach onDone listener BEFORE signalReady
-    window.localmind.llm.onDone(streamId, (usage: any) => {
-      log.info('>>> STREAM DONE -- Full LLM reply received <<<', {
+    // -- onDone listener BEFORE signalReady
+    const doneCleanup = window.localmind.llm.onDone(streamId, (usage: any) => {
+      log.info('>>> STREAM DONE <<<', {
         streamId,
         totalChunks: chunkCount,
         totalCharsReceived,
         usage,
       })
 
-      // FIX: finalizeStreamingMessage MUST be called FIRST so that Zustand
-      // state is committed (isStreaming -> false) before we read it back.
-      // Reading getState() before this call risks capturing a stale snapshot
-      // where the last updateStreamingMessage batch hasn't been flushed yet.
       finalizeStreamingMessage(conversationId, assistantMsg.id)
       setStreaming(false)
-      cleanup()
-      cleanupRef.current = null
+      cleanupOnce()
 
-      // Read state AFTER finalize so content is fully accumulated
       const msgs = useChatStore.getState().messages[conversationId] ?? []
       const finalMsg = msgs.find((m) => m.id === assistantMsg.id)
       const replyLength = finalMsg?.content?.length ?? 0
@@ -130,20 +139,24 @@ export function useStreaming() {
       log.info('Persisting final assistant message to DB', {
         msgId: assistantMsg.id,
         replyLength,
-        replyPreview: finalMsg?.content?.slice(0, 300) ?? '(empty -- no message found in store)',
       })
 
       if (finalMsg) window.localmind.db.saveMessage(finalMsg)
 
       if (msgs.filter((m) => m.role !== 'system').length <= 2) {
         log.info('Auto-generating conversation title', { conversationId })
-        window.localmind.db.generateTitle(conversationId)
+        window.localmind.db.generateTitle(conversationId).then((titleRes) => {
+          if (titleRes.success && titleRes.data) {
+            useChatStore.getState().updateConversationTitle(conversationId, titleRes.data)
+          }
+        })
       }
     })
+    doneCleanupRef.current = doneCleanup
 
-    // -- 4c. Attach onError listener BEFORE signalReady
-    window.localmind.llm.onError(streamId, (err: string) => {
-      log.error('>>> STREAM ERROR received from LLM <<<', {
+    // -- onError listener BEFORE signalReady
+    const errorCleanup = window.localmind.llm.onError(streamId, (err: string) => {
+      log.error('>>> STREAM ERROR <<<', {
         streamId,
         chunksBeforeError: chunkCount,
         error: err,
@@ -151,23 +164,34 @@ export function useStreaming() {
       updateStreamingMessage(conversationId, assistantMsg.id, `\n\n**Error:** ${err}`)
       finalizeStreamingMessage(conversationId, assistantMsg.id)
       setStreaming(false)
-      cleanup()
-      cleanupRef.current = null
+      cleanupOnce()
     })
+    errorCleanupRef.current = errorCleanup
 
-    // -- 5. ALL listeners attached -- now safe to signal main process to flush buffer
+    // -- ALL listeners attached -- signal main process to flush buffer
     log.info('All listeners attached -- signalling ready to main process', { streamId })
     window.localmind.llm.signalReady(streamId)
-    log.info('signalReady fired -- main process will now flush buffered chunks', { streamId })
+    log.info('signalReady fired', { streamId })
 
-  }, [addMessageLocal, updateStreamingMessage, finalizeStreamingMessage, setStreaming])
+  }, [addMessageLocal, updateStreamingMessage, finalizeStreamingMessage, setStreaming, cleanupAllListeners])
 
   const cancelStream = useCallback(() => {
-    log.warn('cancelStream called -- cleaning up listener')
-    cleanupRef.current?.()
-    cleanupRef.current = null
+    log.warn('cancelStream called')
+    const streamId = streamIdRef.current
+    const msgRef = assistantMsgRef.current
+
+    if (streamId) {
+      window.localmind.llm.cancelStream(streamId)
+      log.info('cancelStream: sent cancel to main process', { streamId })
+    }
+
+    if (msgRef) {
+      finalizeStreamingMessage(msgRef.conversationId, msgRef.id)
+    }
+
+    cleanupAllListeners()
     setStreaming(false)
-  }, [setStreaming])
+  }, [setStreaming, finalizeStreamingMessage, cleanupAllListeners])
 
   return { startStream, cancelStream }
 }

@@ -2,9 +2,27 @@ import type { LLMProvider, LLMRequest, LLMStreamChunk, ModelInfo } from '../type
 import { mapProviderError } from '../router'
 import { getSecret } from '../../settings/secrets'
 import { appStore } from '../../settings/app-store'
+import type { CustomProviderConfig } from '@shared/types/localmind-api'
+
+const log = {
+  info:  (msg: string, data?: unknown) => console.log(`[Custom] ${msg}`, data !== undefined ? data : ''),
+  warn:  (msg: string, data?: unknown) => console.warn(`[Custom] [WARN] ${msg}`, data !== undefined ? data : ''),
+  error: (msg: string, data?: unknown) => console.error(`[Custom] [ERROR] ${msg}`, data !== undefined ? data : ''),
+}
 
 export class CustomProvider implements LLMProvider {
+  private config: CustomProviderConfig | null = null
+  private providerId: string | null = null
+
+  constructor(config?: CustomProviderConfig) {
+    if (config) {
+      this.config = config
+      this.providerId = config.id
+    }
+  }
+
   private getBaseUrl(): string {
+    if (this.config) return this.config.baseUrl
     try {
       return appStore.get('customProviderUrl') ?? 'http://localhost:8080/v1'
     } catch {
@@ -13,12 +31,24 @@ export class CustomProvider implements LLMProvider {
   }
 
   private async getApiKey(): Promise<string | null> {
+    if (this.providerId) {
+      return await getSecret(`custom-provider-${this.providerId}-api-key`)
+    }
     return await getSecret('custom-api-key')
   }
 
   async *complete(request: LLMRequest): AsyncIterable<LLMStreamChunk> {
     const baseUrl = this.getBaseUrl()
     const apiKey = await this.getApiKey()
+
+    log.info('Building request', {
+      model: request.model,
+      stream: request.stream,
+      baseUrl,
+      hasApiKey: !!apiKey,
+      messageCount: request.messages.length,
+      providerId: this.providerId,
+    })
 
     const body: any = {
       model: request.model,
@@ -56,29 +86,78 @@ export class CustomProvider implements LLMProvider {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
 
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: request.signal,
+    const fullUrl = `${baseUrl}/chat/completions`
+    log.info('Sending fetch request', { fullUrl, bodyKeys: Object.keys(body) })
+
+    let response: Response
+    try {
+      response = await fetch(fullUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: request.signal,
+      })
+    } catch (err: any) {
+      log.error('fetch() threw an exception', {
+        error: err?.message,
+        name: err?.name,
+        cause: String(err?.cause),
+      })
+      throw err
+    }
+
+    log.info('Response received', {
+      status: response.status,
+      ok: response.ok,
+      contentType: response.headers.get('content-type'),
+      hasBody: !!response.body,
     })
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '')
-      console.error(`[Custom] API error ${response.status}: ${errorBody}`)
-      throw new Error(mapProviderError(response.status, 'Custom Provider') + (errorBody ? `: ${errorBody}` : ''))
+      log.error('API returned non-OK status', {
+        status: response.status,
+        statusText: response.statusText,
+        errorBody: errorBody.slice(0, 500),
+      })
+      throw new Error(mapProviderError(response.status, this.config?.name ?? 'Custom Provider') + (errorBody ? `: ${errorBody}` : ''))
     }
 
     if (request.stream && response.body) {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let readChunkIndex = 0
+      let textChunksYielded = 0
+
+      log.info('Starting stream read loop')
 
       while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+        let readResult: ReadableStreamDefaultReadResult<Uint8Array>
+        try {
+          readResult = await reader.read()
+        } catch (err: any) {
+          log.error('reader.read() threw', { error: err?.message })
+          break
+        }
 
-        buffer += decoder.decode(value, { stream: true })
+        const { done, value } = readResult
+        if (done) {
+          log.info('Stream reader done', { readChunkIndex, textChunksYielded })
+          break
+        }
+
+        const rawText = decoder.decode(value, { stream: true })
+        buffer += rawText
+        readChunkIndex++
+
+        if (readChunkIndex <= 3 || readChunkIndex % 20 === 0) {
+          log.info(`Raw chunk #${readChunkIndex}`, {
+            byteLength: value?.length ?? 0,
+            decodedPreview: rawText.slice(0, 200),
+          })
+        }
+
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
 
@@ -87,15 +166,25 @@ export class CustomProvider implements LLMProvider {
           if (!trimmed || !trimmed.startsWith('data: ')) continue
           const data = trimmed.slice(6)
           if (data === '[DONE]') {
+            log.info('Received [DONE] marker — yielding done')
             yield { type: 'done', usage: { promptTokens: 0, completionTokens: 0 } }
             continue
           }
           try {
             const parsed = JSON.parse(data)
             const delta = parsed.choices?.[0]?.delta
-            if (delta?.content) yield { type: 'text', content: delta.content }
+            if (delta?.content) {
+              textChunksYielded++
+              if (textChunksYielded <= 3 || textChunksYielded % 20 === 0) {
+                log.info(`Yielding text chunk #${textChunksYielded}`, {
+                  contentPreview: delta.content.slice(0, 80),
+                })
+              }
+              yield { type: 'text', content: delta.content }
+            }
             if (delta?.tool_calls) {
               for (const tc of delta.tool_calls) {
+                log.info('Yielding tool_call chunk', { name: tc.function?.name })
                 yield {
                   type: 'tool_call',
                   toolCall: {
@@ -106,11 +195,16 @@ export class CustomProvider implements LLMProvider {
                 }
               }
             }
-          } catch {
-            // skip malformed JSON
+          } catch (parseErr: any) {
+            log.warn('JSON parse failed for SSE data line', {
+              linePreview: data.slice(0, 200),
+              parseError: parseErr?.message,
+            })
           }
         }
       }
+
+      log.info('Stream complete', { readChunkIndex, textChunksYielded })
     } else {
       const data = await response.json()
       const content = data.choices?.[0]?.message?.content
@@ -138,6 +232,17 @@ export class CustomProvider implements LLMProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
+    if (this.config && this.config.models.length > 0) {
+      return this.config.models.map((m) => ({
+        id: m.id,
+        name: m.name ?? m.id,
+        provider: 'custom' as const,
+        customProviderId: this.config!.id,
+        contextWindow: 4096,
+        supportsVision: false,
+        supportsToolUse: true,
+      }))
+    }
     try {
       const baseUrl = this.getBaseUrl()
       const apiKey = await this.getApiKey()
@@ -151,6 +256,7 @@ export class CustomProvider implements LLMProvider {
         id: m.id,
         name: m.id,
         provider: 'custom' as const,
+        customProviderId: this.providerId ?? undefined,
         contextWindow: 4096,
         supportsVision: false,
         supportsToolUse: true,
@@ -169,4 +275,24 @@ export class CustomProvider implements LLMProvider {
       return false
     }
   }
+}
+
+export function getCustomProvidersFromSettings(): CustomProviderConfig[] {
+  try {
+    const providers = appStore.get('customProviders')
+    if (Array.isArray(providers)) return providers
+  } catch {}
+  try {
+    const legacyUrl = appStore.get('customProviderUrl')
+    const legacyModels = appStore.get('customModels')
+    if (legacyUrl || (Array.isArray(legacyModels) && legacyModels.length > 0)) {
+      return [{
+        id: 'legacy',
+        name: 'Custom Provider',
+        baseUrl: legacyUrl ?? 'http://localhost:8080/v1',
+        models: Array.isArray(legacyModels) ? legacyModels : [],
+      }]
+    }
+  } catch {}
+  return []
 }

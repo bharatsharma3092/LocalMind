@@ -7,7 +7,8 @@ interface Props {
 }
 
 export function MessageList({ conversationId }: Props) {
-  const messages = useChatStore((s) => s.messages[conversationId] ?? [])
+  const messagesRaw = useChatStore((s) => s.messages[conversationId])
+  const messages = messagesRaw ?? []
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -15,18 +16,16 @@ export function MessageList({ conversationId }: Props) {
   }, [messages.length, messages[messages.length - 1]?.content])
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-4">
+    <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32">
       {messages.length === 0 && (
-        <div className="flex items-center justify-center h-full text-text-muted text-sm">
+        <div className="flex items-center justify-center h-full text-on-surface-variant text-sm">
           Send a message to start the conversation
         </div>
       )}
-      <div className="max-w-3xl mx-auto flex flex-col gap-4">
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
-        ))}
-        <div ref={bottomRef} />
-      </div>
+      {messages.map((msg) => (
+        <MessageBubble key={msg.id} message={msg} />
+      ))}
+      <div ref={bottomRef} />
     </div>
   )
 }

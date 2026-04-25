@@ -24,6 +24,8 @@ import { listPersonas, createPersona, updatePersona, deletePersona, applyTemplat
 import { listWorkspaces, createWorkspace, updateWorkspace, deleteWorkspace, setActiveWorkspace } from './workspaces/manager'
 import { initRagIndex, indexDocument, queryDocuments, getRagStatus, listDocuments, removeDocument } from './rag/indexer'
 import { exportAllData, importAllData, exportConversation } from './data/manager'
+import { searchWeb } from './websearch/service'
+import type { WebSearchProvider } from './websearch/service'
 
 const log = {
   info:  (tag: string, msg: string, data?: unknown) =>
@@ -39,6 +41,30 @@ const activeStreams = new Map<string, AbortController>()
 export function registerIpcHandlers(win: BrowserWindow): void {
 
   registerApprovalIpcHandlers(win)
+
+  // --- Web Search ------------------------------------------------------------
+  ipcMain.handle('websearch:search', safeHandle(async (_, query: string) => {
+    return await searchWeb(query)
+  }))
+
+  ipcMain.handle('websearch:getProvider', safeHandle(async () => {
+    const provider = appStore.get('webSearchProvider') as WebSearchProvider | undefined
+    return { success: true, data: provider ?? null }
+  }))
+
+  ipcMain.handle('websearch:setProvider', safeHandle(async (_, provider: WebSearchProvider) => {
+    appStore.set('webSearchProvider', provider)
+    return { success: true }
+  }))
+
+  ipcMain.handle('websearch:getEnabled', safeHandle(async () => {
+    return { success: true, data: appStore.get('webSearchEnabled') ?? false }
+  }))
+
+  ipcMain.handle('websearch:setEnabled', safeHandle(async (_, enabled: boolean) => {
+    appStore.set('webSearchEnabled', enabled)
+    return { success: true }
+  }))
 
   // --- LLM -------------------------------------------------------------------
 
@@ -251,6 +277,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('llm:listModels', safeHandle(async (_, provider: string) => {
     log.info('listModels', 'Fetching model list', { provider })
+    llmRouter.reloadCustomProviders()
     const models = await llmRouter.listModels(provider)
     log.info('listModels', 'Models fetched', { provider, count: models?.length })
     return models
@@ -370,7 +397,21 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
 }))
 
   ipcMain.handle('db:generateTitle', safeHandle(async (_, convId: string) => {
-    await generateConversationTitle(convId)
+    const title = await generateConversationTitle(convId)
+    return title
+  }))
+
+  ipcMain.handle('db:updateConversation', safeHandle(async (_, convId: string, data: any) => {
+    const updateData: Record<string, any> = {}
+    if (data.title !== undefined) updateData.title = data.title
+    if (data.starred !== undefined) updateData.starred = data.starred
+    if (data.modelId !== undefined) updateData.modelId = data.modelId
+    if (data.provider !== undefined) updateData.provider = data.provider
+    if (Object.keys(updateData).length > 0) {
+      updateData.updatedAt = Date.now()
+      await db.update(conversations).set(updateData).where(eq(conversations.id, convId))
+      persistDatabase()
+    }
     return undefined
   }))
 
@@ -437,14 +478,24 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
     }
     await mcpHostManager.connectServer(serverConfig)
 
-    await db.insert(mcpServers).values({
-      id: serverConfig.id,
-      workspaceId: config.workspaceId ?? null,
-      name: serverConfig.name,
-      config: JSON.stringify(serverConfig),
-      permissions: JSON.stringify({ autoApprove: serverConfig.autoApprove }),
-      enabled: true,
-    }).catch(() => {})
+    const existing = await db.select().from(mcpServers).where(eq(mcpServers.id, serverConfig.id)).get()
+    if (existing) {
+      await db.update(mcpServers).set({
+        name: serverConfig.name,
+        config: JSON.stringify(serverConfig),
+        permissions: JSON.stringify({ autoApprove: serverConfig.autoApprove }),
+        enabled: true,
+      }).where(eq(mcpServers.id, serverConfig.id))
+    } else {
+      await db.insert(mcpServers).values({
+        id: serverConfig.id,
+        workspaceId: config.workspaceId ?? null,
+        name: serverConfig.name,
+        config: JSON.stringify(serverConfig),
+        permissions: JSON.stringify({ autoApprove: serverConfig.autoApprove }),
+        enabled: true,
+      })
+    }
     persistDatabase()
 
     return { id: serverConfig.id, name: serverConfig.name }
@@ -453,8 +504,16 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
   ipcMain.handle('mcp:disconnect', safeHandle(async (_, serverId: string) => {
     await mcpHostManager.disconnectServer(serverId)
     try {
-      await db.update(mcpServers).set({ enabled: false }).where(eq(mcpServers.id, serverId))
-      persistDatabase()
+      const row = await db.select().from(mcpServers).where(eq(mcpServers.id, serverId)).get()
+      if (row) {
+        const config = JSON.parse(row.config)
+        config.enabled = false
+        await db.update(mcpServers).set({
+          enabled: false,
+          config: JSON.stringify(config),
+        }).where(eq(mcpServers.id, serverId))
+        persistDatabase()
+      }
     } catch {}
     return undefined
   }))
@@ -523,6 +582,16 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
     return allStatus
   }))
 
+  ipcMain.handle('mcp:listSaved', safeHandle(async () => {
+    const saved = await db.select().from(mcpServers).all()
+    return saved.map((row) => ({
+      id: row.id,
+      name: row.name,
+      enabled: row.enabled ?? true,
+      config: JSON.parse(row.config),
+    }))
+  }))
+
   ipcMain.handle('mcp:listPrompts', safeHandle(async (_, serverId: string) => {
     return await mcpHostManager.listPrompts(serverId)
   }))
@@ -564,6 +633,8 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
       description: s.manifest.description,
       category: s.manifest.category,
       icon: s.manifest.icon,
+      author: s.manifest.author,
+      version: s.manifest.version,
       parameters: s.manifest.parameters,
       enabled: s.enabled,
     }))
@@ -778,6 +849,17 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
     return await fetchUrlContent(url)
   }))
 
+  // --- System Status ---------------------------------------------------------
+
+  ipcMain.handle('system:status', safeHandle(async () => {
+    const mem = process.memoryUsage()
+    return {
+      memoryUsed: Math.round(mem.heapUsed / 1024 / 1024),
+      memoryTotal: Math.round(mem.heapTotal / 1024 / 1024),
+      rss: Math.round(mem.rss / 1024 / 1024),
+    }
+  }))
+
   // --- Init on registration --------------------------------------------------
 
   initRagIndex()
@@ -793,7 +875,10 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
         const configs: MCPServerConfig[] = savedServers
           .map((row) => {
             try {
-              return JSON.parse(row.config) as MCPServerConfig
+              const config = JSON.parse(row.config) as MCPServerConfig
+              // Respect DB enabled state over cached config value
+              config.enabled = row.enabled ?? true
+              return config
             } catch {
               return null
             }

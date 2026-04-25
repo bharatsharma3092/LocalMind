@@ -12,6 +12,11 @@ export interface AppSettings {
   artifactPanelWidth: number
   onboardingComplete: boolean
   autoCompressThreshold: number
+  launchOnStartup: boolean
+  systemTray: boolean
+  checkUpdates: boolean
+  defaultModel: string | null
+  contextLength: number
 }
 
 const defaults: AppSettings = {
@@ -26,6 +31,11 @@ const defaults: AppSettings = {
   artifactPanelWidth: 420,
   onboardingComplete: false,
   autoCompressThreshold: 0,
+  launchOnStartup: false,
+  systemTray: false,
+  checkUpdates: true,
+  defaultModel: null,
+  contextLength: 8192,
 }
 
 export const appStore = new ElectronStore<AppSettings>({ defaults })

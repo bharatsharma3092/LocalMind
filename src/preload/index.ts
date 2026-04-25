@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 contextBridge.exposeInMainWorld('localmind', {
   llm: {
@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('localmind', {
         cb(usage)
       }
       ipcRenderer.on(channel, handler)
+      return () => ipcRenderer.removeListener(channel, handler)
     },
 
     onError: (streamId: string, cb: (err: string) => void) => {
@@ -36,6 +37,7 @@ contextBridge.exposeInMainWorld('localmind', {
         cb(err)
       }
       ipcRenderer.on(channel, handler)
+      return () => ipcRenderer.removeListener(channel, handler)
     },
   },
 
@@ -49,6 +51,7 @@ contextBridge.exposeInMainWorld('localmind', {
     deleteConversation: (convId: string) => ipcRenderer.invoke('db:deleteConversation', convId),
     searchConversations: (query: string) => ipcRenderer.invoke('db:searchConversations', query),
     generateTitle: (convId: string) => ipcRenderer.invoke('db:generateTitle', convId),
+    updateConversation: (convId: string, data: any) => ipcRenderer.invoke('db:updateConversation', convId, data),
   },
 
   settings: {
@@ -68,6 +71,7 @@ contextBridge.exposeInMainWorld('localmind', {
     listResources: (serverId: string) => ipcRenderer.invoke('mcp:listResources', serverId),
     readResource: (serverId: string, uri: string) => ipcRenderer.invoke('mcp:readResource', serverId, uri),
     serverStatus: () => ipcRenderer.invoke('mcp:serverStatus'),
+    listSaved: () => ipcRenderer.invoke('mcp:listSaved'),
     listPrompts: (serverId: string) => ipcRenderer.invoke('mcp:listPrompts', serverId),
     getPrompt: (serverId: string, promptName: string, args?: any) => ipcRenderer.invoke('mcp:getPrompt', serverId, promptName, args),
     approveTool: (approvalId: string, decision: string) => ipcRenderer.invoke('mcp:approveTool', approvalId, decision),
@@ -132,6 +136,7 @@ contextBridge.exposeInMainWorld('localmind', {
   },
 
   file: {
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
     upload: (fileData: any) => ipcRenderer.invoke('file:upload', fileData),
     read: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
     uploadFolder: (dirPath: string, extensions?: string[]) => ipcRenderer.invoke('file:uploadFolder', dirPath, extensions),
@@ -139,6 +144,18 @@ contextBridge.exposeInMainWorld('localmind', {
 
   url: {
     fetch: (url: string) => ipcRenderer.invoke('url:fetch', url),
+  },
+
+  websearch: {
+    search: (query: string) => ipcRenderer.invoke('websearch:search', query),
+    getProvider: () => ipcRenderer.invoke('websearch:getProvider'),
+    setProvider: (provider: string) => ipcRenderer.invoke('websearch:setProvider', provider),
+    getEnabled: () => ipcRenderer.invoke('websearch:getEnabled'),
+    setEnabled: (enabled: boolean) => ipcRenderer.invoke('websearch:setEnabled', enabled),
+  },
+
+  system: {
+    status: () => ipcRenderer.invoke('system:status'),
   },
 
   secrets: {

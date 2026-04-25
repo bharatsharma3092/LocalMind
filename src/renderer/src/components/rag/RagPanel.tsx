@@ -45,7 +45,7 @@ export function RagPanel({ onClose }: Props) {
       setIndexing(true)
       setIndexingProgress(0)
       try {
-        await window.localmind.rag.index(file.path)
+        await window.localmind.rag.index(window.localmind.file.getPathForFile(file))
         refresh()
       } catch {}
       setIndexing(false)

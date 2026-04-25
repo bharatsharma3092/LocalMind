@@ -6,15 +6,15 @@ import { llmRouter } from './router'
 
 const TITLE_PROMPT = 'Generate a short, descriptive title (max 6 words) for a conversation that starts with this message. Reply with ONLY the title, nothing else.'
 
-export async function generateConversationTitle(convId: string): Promise<void> {
+export async function generateConversationTitle(convId: string): Promise<string | null> {
   const conv = await db.select().from(conversations).where(eq(conversations.id, convId)).get()
-  if (!conv || conv.title) return
+  if (!conv || conv.title) return conv?.title ?? null
 
   const msgs = await db.select().from(messages).where(eq(messages.conversationId, convId)).limit(2)
-  if (msgs.length === 0) return
+  if (msgs.length === 0) return null
 
   const userMessage = msgs.find((m) => m.role === 'user')
-  if (!userMessage) return
+  if (!userMessage) return null
 
   const titleRequest: LLMRequest = {
     messages: [
@@ -36,8 +36,10 @@ export async function generateConversationTitle(convId: string): Promise<void> {
     title = title.trim().replace(/^["']|["']$/g, '').slice(0, 80)
     if (title) {
       await db.update(conversations).set({ title }).where(eq(conversations.id, convId))
+      return title
     }
   } catch {
     // Non-critical: leave title as null if generation fails
   }
+  return null
 }

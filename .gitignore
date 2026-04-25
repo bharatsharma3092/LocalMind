@@ -7,3 +7,16 @@ dist/
 resources/
 NUL
 tsconfig.tsbuildinfo
+
+# Graphify / generated artifacts
+.graphify*
+graphify-out/
+_parse_detect.py
+_run_ast.py
+
+# Other temp/generated files
+.claude/
+.playwright-mcp/
+electron.vite.config.*.mjs
+opencode.json
+tsconfig.renderer.tsbuildinfo
