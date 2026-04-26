@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { ConversationList } from './ConversationList'
 import { useChatStore } from '../../stores/chatStore'
+import { usePersonaStore } from '../../stores/personaStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useRagStore } from '../../stores/ragStore'
 
@@ -30,6 +31,7 @@ const footerNav = [
 
 export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
   const { createConversation } = useChatStore()
+  const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
   const { loadWorkspaces } = useWorkspaceStore()
   const { loadDocuments, loadStatus } = useRagStore()
 
@@ -60,7 +62,7 @@ export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
       {/* CTA */}
       <div className="px-4 mb-6">
         <button
-          onClick={() => createConversation()}
+          onClick={() => createConversation({ personaId: draftPersonaId })}
           className="w-full bg-primary-container text-white hover:bg-accent-hover transition-colors duration-200 py-3 rounded-lg flex items-center justify-center gap-2 font-semibold text-[14px] shadow-sm"
         >
           <span className="material-symbols-outlined text-[18px]">add</span>

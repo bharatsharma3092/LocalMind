@@ -2,11 +2,11 @@ import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ModelSelector } from './ModelSelector'
 import { ContextBar } from './ContextBar'
+import { PersonaPicker } from '../personas/PersonaPicker'
 import { useChatStore } from '../../stores/chatStore'
-import { useProviderStore } from '../../stores/providerStore'
 
 interface Props {
-  onSettingsClick: () => void
+  onSettingsClick: (tab?: 'general' | 'models' | 'mcp' | 'personas' | 'data') => void
 }
 
 const topNavTabs = [
@@ -15,7 +15,6 @@ const topNavTabs = [
 
 export function ChatView({ onSettingsClick }: Props) {
   const { activeConversationId, conversations } = useChatStore()
-  const { selectedModel } = useProviderStore()
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId)
   const hasActiveConv = !!activeConversationId
@@ -32,6 +31,10 @@ export function ChatView({ onSettingsClick }: Props) {
           </button>
           {/* Model Selector */}
           <ModelSelector />
+          <PersonaPicker
+            conversationId={activeConversationId}
+            onManagePersonas={() => onSettingsClick('personas')}
+          />
           {/* Navigation Links */}
           <nav className="hidden lg:flex items-center gap-1">
             {topNavTabs.map((tab) => (
@@ -102,6 +105,9 @@ export function ChatView({ onSettingsClick }: Props) {
                 <p className="text-sm text-on-surface-variant/80">Privacy-first AI assistant with MCP support</p>
               </div>
               <div className="w-full max-w-3xl">
+                <div className="mb-4 flex justify-center">
+                  <PersonaPicker onManagePersonas={() => onSettingsClick('personas')} />
+                </div>
                 <ChatInput
                   conversationId={activeConversationId ?? ''}
                   disabled={false}

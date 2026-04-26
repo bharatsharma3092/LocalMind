@@ -13,6 +13,7 @@ export const workspaces = sqliteTable('workspaces', {
 export const conversations = sqliteTable('conversations', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').references(() => workspaces.id),
+  personaId: text('persona_id'),
   title: text('title'),
   modelId: text('model_id'),
   provider: text('provider'),

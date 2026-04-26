@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useProviderStore, type CustomProviderConfig } from '../../stores/providerStore'
+import { usePersonaStore } from '../../stores/personaStore'
 import { McpConfigEditor } from '../mcp/McpConfigEditor'
 import { PersonaLibrary } from '../personas/PersonaLibrary'
 
@@ -32,10 +33,18 @@ const tabLabels: Record<SettingsTab, string> = {
   data: 'Data',
 }
 
-export function SettingsPage({ onClose }: { onClose: () => void }) {
+export function SettingsPage({
+  onClose,
+  initialTab = 'general',
+}: {
+  onClose: () => void
+  initialTab?: SettingsTab
+}) {
   const { theme, colorTheme, privacyMode, webSearchEnabled, webSearchProvider, setTheme, setColorTheme, setPrivacyMode, setWebSearchEnabled, setWebSearchProvider } = useSettingsStore()
   const { customProviders, saveCustomProviders, refreshAllModels } = useProviderStore()
-  const [tab, setTab] = useState<SettingsTab>('general')
+  const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
+  const setDraftPersona = usePersonaStore((state) => state.setDraftPersona)
+  const [tab, setTab] = useState<SettingsTab>(initialTab)
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [openaiKey, setOpenaiKey] = useState('')
   const [openrouterKey, setOpenrouterKey] = useState('')
@@ -82,6 +91,10 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
       if (r.success && r.data) setExaKey(r.data)
     })
   }, [])
+
+  useEffect(() => {
+    setTab(initialTab)
+  }, [initialTab])
 
   const saveOllamaUrl = async () => {
     await window.localmind.settings.set('ollamaUrl', ollamaUrl)
@@ -672,7 +685,8 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
             <div className="-m-5 min-h-[400px]">
               <PersonaLibrary
                 embedded
-                onSelect={() => {}}
+                selectedPersonaId={draftPersonaId}
+                onSelect={(persona) => setDraftPersona(persona.id)}
               />
             </div>
           ) : (

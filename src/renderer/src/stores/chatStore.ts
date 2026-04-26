@@ -28,6 +28,7 @@ export interface Message {
 
 export interface Conversation {
   id: string
+  personaId: string | null
   title: string | null
   modelId: string | null
   provider: string | null
@@ -43,7 +44,7 @@ interface ChatStore {
   isStreaming: boolean
 
   loadConversations: () => Promise<void>
-  createConversation: (data?: { modelId?: string; provider?: string }) => Promise<string>
+  createConversation: (data?: { modelId?: string; provider?: string; personaId?: string | null }) => Promise<string>
   selectConversation: (id: string) => Promise<void>
   addMessage: (msg: Omit<Message, 'id' | 'createdAt'>) => Promise<Message>
   addMessageLocal: (convId: string, msg: Message) => void
@@ -53,6 +54,7 @@ interface ChatStore {
   searchConversations: (query: string) => Promise<void>
   setStreaming: (streaming: boolean) => void
   updateConversationTitle: (convId: string, title: string) => void
+  updateConversationPersona: (convId: string, personaId: string | null) => Promise<void>
   toggleStarred: (convId: string) => Promise<void>
 }
 
@@ -94,6 +96,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       id,
       modelId: data?.modelId,
       provider: data?.provider,
+      personaId: data?.personaId ?? null,
     })
 
     if (!res.success) {
@@ -103,6 +106,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     const conv: Conversation = {
       id,
+      personaId: data?.personaId ?? null,
       title: null,
       modelId: data?.modelId ?? null,
       provider: data?.provider ?? null,
@@ -300,6 +304,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((s) => ({
       conversations: s.conversations.map((c) =>
         c.id === convId ? { ...c, title } : c
+      ),
+    }))
+  },
+
+  updateConversationPersona: async (convId, personaId) => {
+    log.info('updateConversationPersona', 'Updating conversation persona', { convId, personaId })
+    await window.localmind.db.updateConversation(convId, { personaId })
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, personaId } : c
       ),
     }))
   },

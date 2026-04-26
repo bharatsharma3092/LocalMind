@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
+import { usePersonaStore } from '../../stores/personaStore'
 
 interface Props {
   conversationId: string
@@ -8,8 +9,11 @@ interface Props {
 
 export function ContextBar({ conversationId }: Props) {
   const messagesRaw = useChatStore((s) => s.messages[conversationId])
+  const activeConversation = useChatStore((s) => s.conversations.find((conversation) => conversation.id === conversationId) ?? null)
   const messages = messagesRaw ?? []
   const { selectedModel } = useProviderStore()
+  const personas = usePersonaStore((s) => s.personas)
+  const activePersona = personas.find((persona) => persona.id === activeConversation?.personaId) ?? null
 
   const tokenCount = useMemo(() => {
     const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0)
@@ -34,6 +38,12 @@ export function ContextBar({ conversationId }: Props) {
 
   return (
     <div className="flex items-center gap-3 px-4 py-1.5 border-b border-border text-xs text-text-muted">
+      {activePersona && (
+        <div className="flex items-center gap-1 rounded-full bg-primary-container/10 px-2 py-1 text-primary-container">
+          <span>{activePersona.icon || '🤖'}</span>
+          <span className="max-w-28 truncate">{activePersona.name}</span>
+        </div>
+      )}
       {attachedFiles.length > 0 && (
         <div className="flex items-center gap-1">
           <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -1,6 +1,6 @@
 import { db } from '../db/connection'
 import { personas } from '../db/schema'
-import { eq } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { v4 as uuid } from 'uuid'
 import { persistDatabase } from '../db/connection'
 
@@ -14,7 +14,7 @@ export interface Persona {
 }
 
 export async function listPersonas(): Promise<Persona[]> {
-  const rows = await db.select().from(personas)
+  const rows = await db.select().from(personas).orderBy(desc(personas.updatedAt), desc(personas.createdAt))
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
@@ -23,6 +23,20 @@ export async function listPersonas(): Promise<Persona[]> {
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   }))
+}
+
+export async function getPersona(id: string): Promise<Persona | null> {
+  const row = await db.select().from(personas).where(eq(personas.id, id)).get()
+  if (!row) return null
+
+  return {
+    id: row.id,
+    name: row.name,
+    systemPrompt: row.systemPrompt,
+    icon: row.icon ?? undefined,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
 }
 
 export async function createPersona(data: Omit<Persona, 'id' | 'createdAt' | 'updatedAt'>): Promise<Persona> {

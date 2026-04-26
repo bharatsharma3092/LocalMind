@@ -20,7 +20,7 @@ import { runSkill } from './skills/runner'
 import { extractFileContent, extractFolderContents } from './files/extractor'
 import { fetchUrlContent } from './files/url-fetcher'
 import { saveArtifact, listArtifacts, getArtifactVersions, exportArtifact } from './artifacts/manager'
-import { listPersonas, createPersona, updatePersona, deletePersona, applyTemplateVariables } from './personas/manager'
+import { listPersonas, createPersona, updatePersona, deletePersona, getPersona, applyTemplateVariables } from './personas/manager'
 import { listWorkspaces, createWorkspace, updateWorkspace, deleteWorkspace, setActiveWorkspace } from './workspaces/manager'
 import { initRagIndex, indexDocument, queryDocuments, getRagStatus, listDocuments, removeDocument } from './rag/indexer'
 import { exportAllData, importAllData, exportConversation } from './data/manager'
@@ -95,6 +95,34 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
       try {
         let currentMessages = [...request.messages]
+        if (request.personaId) {
+          const persona = await getPersona(request.personaId)
+          if (persona) {
+            const personaPrompt = applyTemplateVariables(persona.systemPrompt, {
+              model: request.model,
+              provider: request.provider,
+              ...request.personaVariables,
+            })
+            currentMessages = [
+              {
+                role: 'system',
+                content: personaPrompt,
+              },
+              ...currentMessages,
+            ]
+            log.info('startStream', 'Persona prompt injected into request', {
+              streamId,
+              personaId: persona.id,
+              personaName: persona.name,
+            })
+          } else {
+            log.warn('startStream', 'Requested persona was not found; continuing without it', {
+              streamId,
+              personaId: request.personaId,
+            })
+          }
+        }
+
         const mcpTools = await getMcpToolsAsLlmTools()
         if (mcpTools.length > 0) {
           log.info('startStream', `Injecting ${mcpTools.length} MCP tools into request`, { streamId, tools: mcpTools.map(t => t.function.name) })
@@ -300,6 +328,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     await db.insert(conversations).values({
       id,
       workspaceId: data.workspaceId ?? null,
+      personaId: data.personaId ?? null,
       title: data.title ?? null,
       modelId: data.modelId ?? null,
       provider: data.provider ?? null,
@@ -405,6 +434,7 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
     const updateData: Record<string, any> = {}
     if (data.title !== undefined) updateData.title = data.title
     if (data.starred !== undefined) updateData.starred = data.starred
+    if (data.personaId !== undefined) updateData.personaId = data.personaId
     if (data.modelId !== undefined) updateData.modelId = data.modelId
     if (data.provider !== undefined) updateData.provider = data.provider
     if (Object.keys(updateData).length > 0) {

@@ -1,0 +1,11 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+ANTHROPIC_API_KEY = ""
+ANTHROPIC_AUTH_TOKEN = "sk-1234567890abcdef"
+ANTHROPIC_BASE_URL = "http://127.0.0.1:8082"
+ANTHROPIC_DEFAULT_HAIKU_MODEL = "z-ai/glm5"
+ANTHROPIC_DEFAULT_OPUS_MODEL = "minimaxai/minimax-m2.7"
+ANTHROPIC_DEFAULT_SONNET_MODEL = "zai-org/GLM-5.1-FP8"
+CLAUDE_CODE_SUBAGENT_MODEL = "minimaxai/minimax-m2.7"

@@ -27,6 +27,7 @@ describe('Database schema and CRUD', () => {
     sqlite.run(`CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY NOT NULL,
       workspace_id TEXT REFERENCES workspaces(id),
+      persona_id TEXT,
       title TEXT,
       model_id TEXT,
       provider TEXT,
@@ -83,6 +84,7 @@ describe('Database schema and CRUD', () => {
     db.insert(conversations).values({
       id: 'conv-1',
       workspaceId: 'ws-1',
+      personaId: 'persona-1',
       title: null,
       modelId: 'llama3',
       provider: 'ollama',
@@ -96,6 +98,7 @@ describe('Database schema and CRUD', () => {
     expect(result).toBeDefined()
     expect(result!.modelId).toBe('llama3')
     expect(result!.provider).toBe('ollama')
+    expect(result!.personaId).toBe('persona-1')
   })
 
   it('inserts and reads messages for a conversation', () => {

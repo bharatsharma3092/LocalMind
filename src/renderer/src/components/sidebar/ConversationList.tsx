@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useChatStore } from '../../stores/chatStore'
 import { useDebounce } from '../../hooks/useDebounce'
+import { usePersonaStore } from '../../stores/personaStore'
 
 function getConversationDisplayName(conv: { title: string | null; id: string }, messages: Record<string, { role: string; content: string }[]>): string {
   if (conv.title) return conv.title
@@ -17,6 +18,7 @@ function getConversationDisplayName(conv: { title: string | null; id: string }, 
 
 export function ConversationList() {
   const { conversations, messages, activeConversationId, selectConversation, deleteConversation, loadConversations, searchConversations, toggleStarred } = useChatStore()
+  const personas = usePersonaStore((state) => state.personas)
   const [searchQuery, setSearchQuery] = useState('')
   const [contextMenu, setContextMenu] = useState<{ convId: string; x: number; y: number } | null>(null)
   const debouncedQuery = useDebounce(searchQuery, 300)
@@ -42,55 +44,66 @@ export function ConversationList() {
     await window.localmind.data.exportConversation(convId, format)
   }
 
-  const renderConvItem = (conv: any) => (
-    <div
-      key={conv.id}
-      onClick={() => selectConversation(conv.id)}
-      onContextMenu={(e) => {
-        e.preventDefault()
-        setContextMenu({ convId: conv.id, x: e.clientX, y: e.clientY })
-      }}
-      className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer mb-1 transition-colors ${
-        activeConversationId === conv.id
-          ? 'bg-accent/10 text-accent'
-          : 'hover:bg-surface-hover text-text'
-      }`}
-    >
-      <button
-        onClick={(e) => {
-          e.stopPropagation()
-          toggleStarred(conv.id)
+  const renderConvItem = (conv: any) => {
+    const persona = personas.find((item) => item.id === conv.personaId)
+
+    return (
+      <div
+        key={conv.id}
+        onClick={() => selectConversation(conv.id)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setContextMenu({ convId: conv.id, x: e.clientX, y: e.clientY })
         }}
-        className={`flex-shrink-0 transition-colors ${
-          conv.starred
-            ? 'text-amber-400 hover:text-amber-300'
-            : 'text-transparent group-hover:text-text-muted hover:text-amber-400'
+        className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer mb-1 transition-colors ${
+          activeConversationId === conv.id
+            ? 'bg-accent/10 text-accent'
+            : 'hover:bg-surface-hover text-text'
         }`}
-        title={conv.starred ? 'Unstar' : 'Star'}
       >
-        <svg className="w-3.5 h-3.5" fill={conv.starred ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-        </svg>
-      </button>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">
-          {getConversationDisplayName(conv, messages)}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleStarred(conv.id)
+          }}
+          className={`flex-shrink-0 transition-colors ${
+            conv.starred
+              ? 'text-amber-400 hover:text-amber-300'
+              : 'text-transparent group-hover:text-text-muted hover:text-amber-400'
+          }`}
+          title={conv.starred ? 'Unstar' : 'Star'}
+        >
+          <svg className="w-3.5 h-3.5" fill={conv.starred ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+          </svg>
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <div className="text-sm font-medium truncate">
+              {getConversationDisplayName(conv, messages)}
+            </div>
+            {persona && (
+              <span className="rounded-full bg-primary-container/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary-container">
+                {persona.icon || '🤖'}
+              </span>
+            )}
+          </div>
+          <div className="text-xs text-text-muted">
+            {new Date(conv.updatedAt).toLocaleDateString()}
+          </div>
         </div>
-        <div className="text-xs text-text-muted">
-          {new Date(conv.updatedAt).toLocaleDateString()}
-        </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            deleteConversation(conv.id)
+          }}
+          className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-danger text-xs"
+        >
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
       </div>
-      <button
-        onClick={(e) => {
-          e.stopPropagation()
-          deleteConversation(conv.id)
-        }}
-        className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-danger text-xs"
-      >
-        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-      </button>
-    </div>
-  )
+    )
+  }
 
   return (
     <div className="flex flex-col h-full">

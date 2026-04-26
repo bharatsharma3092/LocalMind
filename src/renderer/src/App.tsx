@@ -11,17 +11,32 @@ import { ArtifactPanel } from './components/artifacts/ArtifactPanel'
 import { McpPermissionDialog } from './components/mcp/McpPermissionDialog'
 import { useSettingsStore } from './stores/settingsStore'
 import { useProviderStore } from './stores/providerStore'
+import { usePersonaStore } from './stores/personaStore'
 
 function App() {
   const { loadSettings } = useSettingsStore()
   const { refreshAllModels, loadCustomProviders } = useProviderStore()
+  const { loadPersonas } = usePersonaStore()
   const [currentPage, setCurrentPage] = useState<AppPage>('chat')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<'general' | 'models' | 'mcp' | 'personas' | 'data'>('general')
 
   useEffect(() => {
     loadSettings()
+    loadPersonas()
     loadCustomProviders().then(() => refreshAllModels())
-  }, [loadSettings, refreshAllModels, loadCustomProviders])
+  }, [loadSettings, loadPersonas, refreshAllModels, loadCustomProviders])
+
+  useEffect(() => {
+    const handleOpenSettingsTab = (event: Event) => {
+      const customEvent = event as CustomEvent<'general' | 'models' | 'mcp' | 'personas' | 'data'>
+      setSettingsTab(customEvent.detail ?? 'general')
+      setSettingsOpen(true)
+    }
+
+    window.addEventListener('localmind:open-settings-tab', handleOpenSettingsTab)
+    return () => window.removeEventListener('localmind:open-settings-tab', handleOpenSettingsTab)
+  }, [])
 
   const handleNavigate = (page: AppPage) => {
     setCurrentPage(page)
@@ -39,7 +54,10 @@ function App() {
         )}
         <div className={`flex-1 flex flex-col h-full overflow-hidden ${currentPage !== 'settings' ? 'md:ml-[260px]' : ''}`}>
           {currentPage === 'chat' && (
-            <ChatView onSettingsClick={() => setSettingsOpen(true)} />
+            <ChatView onSettingsClick={(tab) => {
+              setSettingsTab(tab ?? 'general')
+              setSettingsOpen(true)
+            }} />
           )}
           {currentPage === 'mcp' && <McpManagementPage />}
           {currentPage === 'skills' && <SkillsPage />}
@@ -50,7 +68,7 @@ function App() {
         <ArtifactPanel />
         <ToastContainer />
         <McpPermissionDialog />
-        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}
+        {settingsOpen && <SettingsPage initialTab={settingsTab} onClose={() => setSettingsOpen(false)} />}
       </div>
     </ErrorBoundary>
   )

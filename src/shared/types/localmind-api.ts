@@ -53,6 +53,8 @@ export interface LLMRequest {
   model: string
   provider: ProviderType
   customProviderId?: string
+  personaId?: string
+  personaVariables?: Record<string, string>
   tools?: ToolDefinition[]
   stream: boolean
   signal?: AbortSignal
@@ -80,13 +82,14 @@ export interface ModelInfo {
 
 // ─── API Interfaces ───────────────────────────────
 export interface LLMApi {
-  startStream: (req: LLMRequest) => Promise<{ streamId: string }>
+  startStream: (req: LLMRequest) => Promise<IPCResponse<{ streamId: string }>>
   cancelStream: (streamId: string) => Promise<void>
   listModels: (provider: string) => Promise<IPCResponse<ModelInfo[]>>
   estimateCost: (req: LLMRequest) => Promise<IPCResponse<TokenUsage>>
   onChunk: (streamId: string, cb: (chunk: LLMStreamChunk) => void) => () => void
-  onDone: (streamId: string, cb: (usage: TokenUsage) => void) => void
-  onError: (streamId: string, cb: (err: string) => void) => void
+  onDone: (streamId: string, cb: (usage: TokenUsage) => void) => () => void
+  onError: (streamId: string, cb: (err: string) => void) => () => void
+  signalReady: (streamId: string) => void
 }
 
 export interface DbApi {
@@ -95,6 +98,7 @@ export interface DbApi {
   getMessages: (convId: string) => Promise<IPCResponse<any[]>>
   saveMessage: (msg: any) => Promise<IPCResponse<void>>
   updateMessage: (id: string, content: string) => Promise<IPCResponse<void>>
+  updateConversation: (convId: string, data: any) => Promise<IPCResponse<void>>
   deleteMessagesAfter: (convId: string, messageId: string) => Promise<IPCResponse<void>>
   deleteConversation: (convId: string) => Promise<IPCResponse<void>>
   searchConversations: (query: string) => Promise<IPCResponse<any[]>>
@@ -123,6 +127,11 @@ export interface SettingsApi {
   updateShortcut: (shortcut: string) => Promise<IPCResponse<void>>
 }
 
+export interface SecretsApi {
+  get: (service: string) => Promise<IPCResponse<string | null>>
+  set: (service: string, value: string) => Promise<IPCResponse<void>>
+}
+
 export interface SkillApi {
   list: () => Promise<IPCResponse<any[]>>
   activate: (skillId: string, convId: string) => Promise<IPCResponse<void>>
@@ -147,10 +156,19 @@ export interface WorkspaceApi {
   setActive: (id: string) => Promise<IPCResponse<void>>
 }
 
+export interface Persona {
+  id: string
+  name: string
+  systemPrompt: string
+  icon?: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface PersonaApi {
-  list: () => Promise<IPCResponse<any[]>>
-  create: (data: any) => Promise<IPCResponse<void>>
-  update: (id: string, data: any) => Promise<IPCResponse<void>>
+  list: () => Promise<IPCResponse<Persona[]>>
+  create: (data: Omit<Persona, 'id' | 'createdAt' | 'updatedAt'>) => Promise<IPCResponse<Persona>>
+  update: (id: string, data: Partial<Pick<Persona, 'name' | 'systemPrompt' | 'icon'>>) => Promise<IPCResponse<void>>
   delete: (id: string) => Promise<IPCResponse<void>>
 }
 
@@ -170,6 +188,7 @@ export interface DataApi {
 }
 
 export interface FileApi {
+  getPathForFile: (file: File) => string | null
   upload: (fileData: any) => Promise<IPCResponse<any>>
   read: (filePath: string) => Promise<IPCResponse<string>>
   uploadFolder: (dirPath: string, extensions?: string[]) => Promise<IPCResponse<any[]>>
@@ -179,11 +198,20 @@ export interface UrlApi {
   fetch: (url: string) => Promise<IPCResponse<string>>
 }
 
+export interface WebSearchApi {
+  search: (query: string) => Promise<any>
+  getProvider: () => Promise<IPCResponse<string | null>>
+  setProvider: (provider: string) => Promise<IPCResponse<void>>
+  getEnabled: () => Promise<IPCResponse<boolean>>
+  setEnabled: (enabled: boolean) => Promise<IPCResponse<void>>
+}
+
 export interface LocalMindAPI {
   llm: LLMApi
   db: DbApi
   mcp: McpApi
   settings: SettingsApi
+  secrets: SecretsApi
   skill: SkillApi
   artifact: ArtifactApi
   workspace: WorkspaceApi
@@ -192,6 +220,7 @@ export interface LocalMindAPI {
   data: DataApi
   file: FileApi
   url: UrlApi
+  websearch: WebSearchApi
 }
 
 declare global {

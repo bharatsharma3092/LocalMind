@@ -50,6 +50,7 @@ export function runMigrations(): void {
       `CREATE TABLE IF NOT EXISTS conversations (
         id TEXT PRIMARY KEY NOT NULL,
         workspace_id TEXT REFERENCES workspaces(id),
+        persona_id TEXT,
         title TEXT,
         model_id TEXT,
         provider TEXT,
@@ -138,6 +139,14 @@ export function runMigrations(): void {
     for (const sql of tables) {
       sqlite.run(sql)
     }
+  }
+
+  const conversationColumns = sqlite
+    .exec('PRAGMA table_info(conversations)')[0]
+    ?.values.map((row: unknown[]) => String(row[1])) ?? []
+
+  if (!conversationColumns.includes('persona_id')) {
+    sqlite.run('ALTER TABLE conversations ADD COLUMN persona_id TEXT')
   }
 
   // Save initial DB to disk

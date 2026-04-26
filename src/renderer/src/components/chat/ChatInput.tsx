@@ -3,6 +3,8 @@ import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useStreaming } from '../../hooks/useStreaming'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { usePersonaStore } from '../../stores/personaStore'
+import { PersonaPicker } from '../personas/PersonaPicker'
 import { SkillLauncher } from '../skills/SkillLauncher'
 import type { LLMRequest } from '@shared/types/localmind-api'
 
@@ -43,9 +45,11 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { isStreaming, addMessage, createConversation } = useChatStore()
+  const conversations = useChatStore((state) => state.conversations)
   const { selectedModel } = useProviderStore()
   const { startStream, cancelStream } = useStreaming()
   const { webSearchEnabled } = useSettingsStore()
+  const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
 
   // Poll MCP server status
   useEffect(() => {
@@ -185,6 +189,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
 
   const handleSend = useCallback(async () => {
     let currentConvId = conversationId
+    let personaIdForRequest = conversations.find((conversation) => conversation.id === currentConvId)?.personaId ?? draftPersonaId ?? null
     const content = input.trim()
     if ((!content && attachedContexts.length === 0) || isStreaming) {
       return
@@ -193,9 +198,10 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
     // In landing mode with no conversation, create one on-the-fly
     if (!currentConvId && isLanding) {
       setIsCreatingConv(true)
-      currentConvId = await createConversation()
+      currentConvId = await createConversation({ personaId: draftPersonaId ?? null })
       setIsCreatingConv(false)
       if (!currentConvId) return
+      personaIdForRequest = draftPersonaId ?? null
     }
 
     if (!currentConvId || disabled) {
@@ -256,11 +262,16 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
       model: selectedModel?.id ?? 'qwen2.5:7b',
       provider: (selectedModel?.provider as any) ?? 'ollama',
       customProviderId: selectedModel?.customProviderId,
+      personaId: personaIdForRequest ?? undefined,
+      personaVariables: {
+        model: selectedModel?.name ?? selectedModel?.id ?? 'qwen2.5:7b',
+        provider: selectedModel?.provider ?? 'ollama',
+      },
       stream: true,
     }
 
     await startStream(currentConvId, request)
-  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation])
+  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -383,6 +394,13 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
           {/* Bottom Toolbar */}
           <div className="flex items-center justify-between px-2 pb-1 pt-2 border-t border-surface-container-highest/50">
             <div className="flex items-center gap-1 relative">
+              <PersonaPicker
+                conversationId={conversationId || null}
+                onManagePersonas={() => {
+                  window.dispatchEvent(new CustomEvent('localmind:open-settings-tab', { detail: 'personas' }))
+                }}
+              />
+              <div className="w-px h-4 bg-surface-container-highest mx-2"></div>
               {/* MCP + button */}
               <div className="relative" ref={mcpMenuRef}>
                 <button
