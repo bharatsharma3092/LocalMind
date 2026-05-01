@@ -53,6 +53,7 @@ export interface LLMRequest {
   model: string
   provider: ProviderType
   customProviderId?: string
+  agentId?: string
   personaId?: string
   personaVariables?: Record<string, string>
   tools?: ToolDefinition[]
@@ -141,6 +142,29 @@ export interface SkillApi {
   delete: (id: string) => Promise<IPCResponse<void>>
 }
 
+export interface Agent {
+  id: string
+  name: string
+  description: string
+  systemPrompt: string
+  icon?: string
+  category: string
+  enabled: boolean
+  builtIn?: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AgentApi {
+  list: () => Promise<IPCResponse<Agent[]>>
+  create: (data: Omit<Agent, 'id' | 'builtIn' | 'createdAt' | 'updatedAt'>) => Promise<IPCResponse<Agent>>
+  update: (id: string, data: Partial<Pick<Agent, 'name' | 'description' | 'systemPrompt' | 'icon' | 'category' | 'enabled'>>) => Promise<IPCResponse<void>>
+  delete: (id: string) => Promise<IPCResponse<void>>
+  approveTool: (approvalId: string, decision: string) => Promise<IPCResponse<void>>
+  onApprovalRequest: (cb: (data: any) => void) => void
+  offApprovalRequest: (cb: (data: any) => void) => void
+}
+
 export interface ArtifactApi {
   save: (data: any) => Promise<IPCResponse<void>>
   list: (convId: string) => Promise<IPCResponse<any[]>>
@@ -213,6 +237,7 @@ export interface LocalMindAPI {
   settings: SettingsApi
   secrets: SecretsApi
   skill: SkillApi
+  agent: AgentApi
   artifact: ArtifactApi
   workspace: WorkspaceApi
   persona: PersonaApi

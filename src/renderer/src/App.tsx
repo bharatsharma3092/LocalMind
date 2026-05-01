@@ -3,12 +3,14 @@ import { Sidebar, type AppPage } from './components/sidebar/Sidebar'
 import { ChatView } from './components/chat/ChatView'
 import { McpManagementPage } from './components/mcp/McpManagementPage'
 import { SkillsPage } from './components/skills/SkillsPage'
+import { AgentsPage } from './components/agents/AgentsPage'
 import { ToastContainer } from './components/ui/ToastContainer'
 import { SettingsPage } from './components/settings/SettingsPage'
 import { ConfigurationPage } from './components/settings/ConfigurationPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ArtifactPanel } from './components/artifacts/ArtifactPanel'
 import { McpPermissionDialog } from './components/mcp/McpPermissionDialog'
+import { AgentToolPermissionDialog } from './components/agents/AgentToolPermissionDialog'
 import { useSettingsStore } from './stores/settingsStore'
 import { useProviderStore } from './stores/providerStore'
 import { usePersonaStore } from './stores/personaStore'
@@ -61,6 +63,7 @@ function App() {
           )}
           {currentPage === 'mcp' && <McpManagementPage />}
           {currentPage === 'skills' && <SkillsPage />}
+          {currentPage === 'agents' && <AgentsPage />}
           {currentPage === 'settings' && (
             <ConfigurationPage onNavigate={handleNavigate} />
           )}
@@ -68,6 +71,7 @@ function App() {
         <ArtifactPanel />
         <ToastContainer />
         <McpPermissionDialog />
+        <AgentToolPermissionDialog />
         {settingsOpen && <SettingsPage initialTab={settingsTab} onClose={() => setSettingsOpen(false)} />}
       </div>
     </ErrorBoundary>

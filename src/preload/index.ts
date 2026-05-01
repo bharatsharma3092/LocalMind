@@ -94,6 +94,21 @@ contextBridge.exposeInMainWorld('localmind', {
     delete: (id: string) => ipcRenderer.invoke('skill:delete', id),
   },
 
+  agent: {
+    list: () => ipcRenderer.invoke('agent:list'),
+    create: (data: any) => ipcRenderer.invoke('agent:create', data),
+    update: (id: string, data: any) => ipcRenderer.invoke('agent:update', id, data),
+    delete: (id: string) => ipcRenderer.invoke('agent:delete', id),
+    approveTool: (approvalId: string, decision: string) => ipcRenderer.invoke('agent:approveTool', approvalId, decision),
+    onApprovalRequest: (cb: (data: any) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('agent:approvalRequest', handler)
+    },
+    offApprovalRequest: (cb: any) => {
+      ipcRenderer.removeListener('agent:approvalRequest', cb)
+    },
+  },
+
   artifact: {
     save: (data: any) => ipcRenderer.invoke('artifact:save', data),
     list: (convId: string) => ipcRenderer.invoke('artifact:list', convId),

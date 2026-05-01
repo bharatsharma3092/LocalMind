@@ -96,6 +96,18 @@ export function runMigrations(): void {
         enabled INTEGER DEFAULT 1,
         installed_at INTEGER NOT NULL
       )`,
+      `CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        system_prompt TEXT NOT NULL,
+        icon TEXT,
+        category TEXT NOT NULL,
+        enabled INTEGER DEFAULT 1,
+        built_in INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
       `CREATE TABLE IF NOT EXISTS personas (
         id TEXT PRIMARY KEY NOT NULL,
         name TEXT NOT NULL,
@@ -148,6 +160,19 @@ export function runMigrations(): void {
   if (!conversationColumns.includes('persona_id')) {
     sqlite.run('ALTER TABLE conversations ADD COLUMN persona_id TEXT')
   }
+
+  sqlite.run(`CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    system_prompt TEXT NOT NULL,
+    icon TEXT,
+    category TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    built_in INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
 
   // Save initial DB to disk
   persistDatabase()

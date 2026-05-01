@@ -7,6 +7,7 @@ import { usePersonaStore } from '../../stores/personaStore'
 import { PersonaPicker } from '../personas/PersonaPicker'
 import { SkillLauncher } from '../skills/SkillLauncher'
 import type { LLMRequest } from '@shared/types/localmind-api'
+import type { Agent } from '@shared/types/localmind-api'
 
 const log = {
   info:  (fn: string, msg: string, data?: unknown) => console.log(`[ChatInput][${fn}] ${msg}`, data !== undefined ? data : ''),
@@ -25,9 +26,11 @@ interface Props {
   conversationId: string
   disabled?: boolean
   isLanding?: boolean
+  forcedAgent?: Agent | null
+  compactTools?: boolean
 }
 
-export function ChatInput({ conversationId, disabled = false, isLanding = false }: Props) {
+export function ChatInput({ conversationId, disabled = false, isLanding = false, forcedAgent = null, compactTools = false }: Props) {
   const [input, setInput] = useState('')
   const [showSkillLauncher, setShowSkillLauncher] = useState(false)
   const [attachedContexts, setAttachedContexts] = useState<AttachedContext[]>([])
@@ -55,6 +58,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
   useEffect(() => {
     const fetchMcpStatus = async () => {
       try {
+        if (!window.localmind?.mcp?.serverStatus) return
         const res = await window.localmind.mcp.serverStatus()
         if (res.success && res.data) {
           setMcpServers(res.data.filter((s: any) => s.status === 'connected'))
@@ -73,6 +77,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
     if (!showMcpMenu) return
     const fetchInstalled = async () => {
       try {
+        if (!window.localmind?.mcp?.listSaved) return
         const res = await window.localmind.mcp.listSaved()
         if (res.success && res.data) {
           setInstalledMcps(res.data)
@@ -113,9 +118,9 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
     })
     try {
       if (server.enabled) {
-        await window.localmind.mcp.disconnect(server.id)
+        await window.localmind?.mcp?.disconnect(server.id)
       } else {
-        await window.localmind.mcp.connect(server.config)
+        await window.localmind?.mcp?.connect(server.config)
       }
     } catch (err: any) {
       log.error('toggleMcp', 'Failed to toggle MCP', err?.message)
@@ -138,6 +143,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
   const handleFileUpload = useCallback(async (filePath: string) => {
     setUploading(true)
     try {
+      if (!window.localmind?.file?.upload) return
       const res = await window.localmind.file.upload({ path: filePath })
       if (res.success && res.data) {
         let content = res.data.text
@@ -164,6 +170,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
     if (!url) return
     setFetchingUrl(true)
     try {
+      if (!window.localmind?.url?.fetch) return
       const res = await window.localmind.url.fetch(url)
       if (res.success && res.data) {
         const ctx: AttachedContext = {
@@ -228,12 +235,14 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
     if (webSearchActive && webSearchEnabled) {
       setSearching(true)
       try {
-        const res = await window.localmind.websearch.search(content)
-        if (res.success && res.results && res.results.length > 0) {
-          const searchResults = res.results.map((r: any, i: number) =>
-            `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`
-          ).join('\n\n')
-          finalContent = `Web search results for "${content}":\n\n${searchResults}\n\nUser query: ${finalContent}`
+        if (window.localmind?.websearch?.search) {
+          const res = await window.localmind.websearch.search(content)
+          if (res.success && res.results && res.results.length > 0) {
+            const searchResults = res.results.map((r: any, i: number) =>
+              `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`
+            ).join('\n\n')
+            finalContent = `Web search results for "${content}":\n\n${searchResults}\n\nUser query: ${finalContent}`
+          }
         }
       } catch (err) {
         console.error('[WebSearch] Search failed', err)
@@ -262,6 +271,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
       model: selectedModel?.id ?? 'qwen2.5:7b',
       provider: (selectedModel?.provider as any) ?? 'ollama',
       customProviderId: selectedModel?.customProviderId,
+      agentId: forcedAgent?.id,
       personaId: personaIdForRequest ?? undefined,
       personaVariables: {
         model: selectedModel?.name ?? selectedModel?.id ?? 'qwen2.5:7b',
@@ -271,7 +281,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
     }
 
     await startStream(currentConvId, request)
-  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId])
+  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId, forcedAgent])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -310,23 +320,24 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
         {/* Glow */}
         <div className="absolute -inset-0.5 bg-gradient-to-r from-secondary-container/50 to-primary-container/50 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-500"></div>
 
+        {/* Skill Launcher */}
+        {showSkillLauncher && (
+          <div className="absolute left-1/2 bottom-full z-50 mb-3 w-[min(720px,calc(100vw-2rem))] -translate-x-1/2">
+            <SkillLauncher
+              onSelect={(skill) => {
+                setInput(`[${skill.name}] `)
+                setShowSkillLauncher(false)
+                textareaRef.current?.focus()
+              }}
+              onClose={() => {
+                setShowSkillLauncher(false)
+                if (input === '/') setInput('')
+              }}
+            />
+          </div>
+        )}
+
         <div className="relative bg-surface-container-low border border-surface-container-highest rounded-2xl p-2 shadow-lg focus-within:border-secondary/50 transition-colors duration-300 flex flex-col">
-          {/* Skill Launcher */}
-          {showSkillLauncher && (
-            <div className="mb-2">
-              <SkillLauncher
-                onSelect={(skill) => {
-                  setInput(`[${skill.name}] `)
-                  setShowSkillLauncher(false)
-                  textareaRef.current?.focus()
-                }}
-                onClose={() => {
-                  setShowSkillLauncher(false)
-                  if (input === '/') setInput('')
-                }}
-              />
-            </div>
-          )}
 
           {/* Attached contexts */}
           {attachedContexts.length > 0 && (
@@ -394,13 +405,17 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
           {/* Bottom Toolbar */}
           <div className="flex items-center justify-between px-2 pb-1 pt-2 border-t border-surface-container-highest/50">
             <div className="flex items-center gap-1 relative">
-              <PersonaPicker
-                conversationId={conversationId || null}
-                onManagePersonas={() => {
-                  window.dispatchEvent(new CustomEvent('localmind:open-settings-tab', { detail: 'personas' }))
-                }}
-              />
-              <div className="w-px h-4 bg-surface-container-highest mx-2"></div>
+              {!compactTools && (
+                <>
+                  <PersonaPicker
+                    conversationId={conversationId || null}
+                    onManagePersonas={() => {
+                        window.dispatchEvent(new CustomEvent('localmind:open-settings-tab', { detail: 'personas' }))
+                    }}
+                  />
+                  <div className="w-px h-4 bg-surface-container-highest mx-2"></div>
+                </>
+              )}
               {/* MCP + button */}
               <div className="relative" ref={mcpMenuRef}>
                 <button
@@ -459,7 +474,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false 
                 onChange={async (e) => {
                   const file = e.target.files?.[0]
                   if (file) {
-                    const filePath = window.localmind.file.getPathForFile(file)
+                    const filePath = window.localmind?.file?.getPathForFile(file)
                     if (filePath) await handleFileUpload(filePath)
                   }
                   if (fileInputRef.current) fileInputRef.current.value = ''

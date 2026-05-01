@@ -1,7 +1,7 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { v4 as uuid } from 'uuid'
 import { db, persistDatabase } from './db/connection'
-import { conversations, messages, workspaces, mcpServers, skills, personas, artifacts } from './db/schema'
+import { conversations, messages, workspaces, mcpServers, skills, agents, personas, artifacts } from './db/schema'
 import { eq, like, desc, and, gt } from 'drizzle-orm'
 import { ok, fail, safeHandle } from './utils/ipc-response'
 import { appStore } from './settings/app-store'
@@ -14,7 +14,7 @@ import type { LLMRequest, LLMStreamChunk } from './llm/types'
 import type { ToolCall } from '@shared/types/localmind-api'
 import { mcpHostManager, type MCPServerConfig, reconnectSavedServers } from './mcp/host-manager'
 import { registerApprovalIpcHandlers } from './mcp/approval'
-import { getMcpToolsAsLlmTools, executeMcpToolCall, isMcpToolName } from './llm/tool-executor'
+import { getMcpToolsAsLlmTools, getLocalWorkspaceTools, getSkillTools, executeMcpToolCall, executeLocalToolCall, isMcpToolName, isLocalToolName } from './llm/tool-executor'
 import { loadBuiltinSkills, getAllSkills, addSkill, removeSkill, type SkillManifest } from './skills/loader'
 import { runSkill } from './skills/runner'
 import { extractFileContent, extractFolderContents } from './files/extractor'
@@ -37,6 +37,71 @@ const log = {
 }
 
 const activeStreams = new Map<string, AbortController>()
+const pendingAgentApprovals = new Map<string, (decision: string) => void>()
+
+const builtinAgents = [
+  {
+    id: 'cowork',
+    name: 'Cowork',
+    description: 'A collaborative coding partner that helps plan, implement, review, and test changes with project context.',
+    systemPrompt: [
+      'You are Cowork, a collaborative software engineering agent inside LocalMind.',
+      'Work like a careful pair programmer with access to local workspace tools: inspect files, search code, write targeted changes, and run existing npm scripts when useful.',
+      'Clarify intent only when needed, propose practical next steps, and help the user move from idea to verified implementation.',
+      'Prefer concrete actions, concise reasoning, and testable results. Before changing files, inspect the relevant code and keep edits scoped.',
+      'Keep privacy in mind and avoid suggesting cloud services unless the user asks for them or the current provider is already cloud-based.',
+    ].join('\n'),
+    icon: 'groups',
+    category: 'Development',
+    enabled: true,
+    builtIn: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+  {
+    id: 'code',
+    name: 'Code',
+    description: 'A coding agent for planning, editing, debugging, reviewing, testing, and running project workflows with local tools.',
+    systemPrompt: [
+      'You are Code, a local coding agent inside LocalMind with tools similar to a terminal coding assistant.',
+      'You can plan implementation, inspect files, glob for paths, grep/search code, read files, write files, delete paths after approval, run existing npm scripts, use MCP tools, and invoke LocalMind skills.',
+      'Default to a practical engineering loop: understand the request, inspect relevant code, make focused edits, run verification, and summarize the outcome.',
+      'For debugging and review, prioritize concrete bugs, failing paths, missing tests, and exact file references.',
+      'Keep changes scoped and do not delete files unless the user approves the delete confirmation.',
+    ].join('\n'),
+    icon: 'terminal',
+    category: 'Coding',
+    enabled: true,
+    builtIn: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+]
+
+type LocalMindAgent = typeof builtinAgents[number]
+
+async function listAgents(): Promise<LocalMindAgent[]> {
+  const rows = await db.select().from(agents).all()
+  const byId = new Map<string, any>()
+  for (const agent of builtinAgents) byId.set(agent.id, { ...agent })
+  for (const row of rows) byId.set(row.id, {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    systemPrompt: row.systemPrompt,
+    icon: row.icon ?? undefined,
+    category: row.category,
+    enabled: row.enabled ?? true,
+    builtIn: row.builtIn ?? false,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  })
+  return Array.from(byId.values())
+}
+
+async function getAgent(agentId: string): Promise<LocalMindAgent | undefined> {
+  return (await listAgents()).find((agent) => agent.id === agentId && agent.enabled)
+}
 
 export function registerIpcHandlers(win: BrowserWindow): void {
 
@@ -64,6 +129,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('websearch:setEnabled', safeHandle(async (_, enabled: boolean) => {
     appStore.set('webSearchEnabled', enabled)
     return { success: true }
+  }))
+
+  ipcMain.handle('agent:approveTool', safeHandle(async (_, approvalId: string, decision: string) => {
+    pendingAgentApprovals.get(approvalId)?.(decision)
+    pendingAgentApprovals.delete(approvalId)
+    return undefined
   }))
 
   // --- LLM -------------------------------------------------------------------
@@ -95,6 +166,29 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
       try {
         let currentMessages = [...request.messages]
+        if (request.agentId) {
+          const agent = await getAgent(request.agentId)
+          if (agent) {
+            currentMessages = [
+              {
+                role: 'system',
+                content: agent.systemPrompt,
+              },
+              ...currentMessages,
+            ]
+            log.info('startStream', 'Agent prompt injected into request', {
+              streamId,
+              agentId: agent.id,
+              agentName: agent.name,
+            })
+          } else {
+            log.warn('startStream', 'Requested agent was not found or disabled; continuing without it', {
+              streamId,
+              agentId: request.agentId,
+            })
+          }
+        }
+
         if (request.personaId) {
           const persona = await getPersona(request.personaId)
           if (persona) {
@@ -124,8 +218,16 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         }
 
         const mcpTools = await getMcpToolsAsLlmTools()
-        if (mcpTools.length > 0) {
-          log.info('startStream', `Injecting ${mcpTools.length} MCP tools into request`, { streamId, tools: mcpTools.map(t => t.function.name) })
+        const isToolAgent = request.agentId === 'cowork' || request.agentId === 'code'
+        const localTools = isToolAgent ? getLocalWorkspaceTools() : []
+        const enabledSkills = isToolAgent ? (await getAllSkillsForTools()) : []
+        const skillTools = isToolAgent ? getSkillTools(enabledSkills) : []
+        const availableTools = [...mcpTools, ...localTools, ...skillTools]
+        if (availableTools.length > 0) {
+          log.info('startStream', `Injecting ${availableTools.length} tools into request`, {
+            streamId,
+            tools: availableTools.map(t => t.function.name),
+          })
         }
 
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -136,13 +238,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
             messages: currentMessages,
             stream: true,
             signal: controller.signal,
-            tools: mcpTools.length > 0 ? mcpTools : undefined,
+            tools: availableTools.length > 0 ? availableTools : undefined,
           }
 
           log.info('startStream', `Round ${round + 1}: sending to LLM`, {
             streamId,
             messageCount: currentMessages.length,
-            toolCount: mcpTools.length,
+            toolCount: availableTools.length,
             messages: currentMessages.map((m, i) => ({
               index: i,
               role: m.role,
@@ -240,6 +342,39 @@ export function registerIpcHandlers(win: BrowserWindow): void {
               sendChunk(browserWin, streamId, resultChunk)
 
               toolResult = await executeMcpToolCall(tc)
+            } else if (isLocalToolName(tc.name)) {
+              log.info('startStream', `Executing local workspace tool: ${tc.name}`, { streamId })
+              const resultChunk: LLMStreamChunk = {
+                type: 'tool_result',
+                toolCall: tc,
+                content: 'Executing...',
+              }
+              sendChunk(browserWin, streamId, resultChunk)
+
+              toolResult = await executeLocalToolCall(tc, async (toolName, args) => {
+                const approvalId = `${toolName}:${Date.now()}`
+                win.webContents.send('agent:approvalRequest', {
+                  approvalId,
+                  agentId: request.agentId,
+                  toolName,
+                  args,
+                  description: 'This action can delete local workspace data and needs your approval.',
+                })
+                const decision = await new Promise<string>((resolve) => {
+                  pendingAgentApprovals.set(approvalId, resolve)
+                })
+                return decision === 'approved'
+              })
+            } else if (tc.name.startsWith('skill__')) {
+              log.info('startStream', `Executing LocalMind skill tool: ${tc.name}`, { streamId })
+              const resultChunk: LLMStreamChunk = {
+                type: 'tool_result',
+                toolCall: tc,
+                content: 'Executing...',
+              }
+              sendChunk(browserWin, streamId, resultChunk)
+
+              toolResult = await executeSkillToolCall(tc, request)
             } else {
               toolResult = {
                 role: 'tool',
@@ -644,9 +779,17 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
     const dbSkills = await db.select().from(skills)
     const allSkills = [...builtinSkills]
     for (const dbs of dbSkills) {
-      if (!allSkills.find((s) => s.id === dbs.id)) {
-        try {
-          const manifest = JSON.parse(dbs.manifest)
+      try {
+        const manifest = JSON.parse(dbs.manifest)
+        const existingIndex = allSkills.findIndex((s) => s.id === dbs.id)
+        if (existingIndex >= 0) {
+          allSkills[existingIndex] = {
+            ...allSkills[existingIndex],
+            manifest,
+            enabled: dbs.enabled ?? true,
+            installedAt: dbs.installedAt,
+          }
+        } else {
           allSkills.push({
             id: dbs.id,
             manifest,
@@ -654,8 +797,8 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
             enabled: dbs.enabled ?? true,
             installedAt: dbs.installedAt,
           })
-        } catch {}
-      }
+        }
+      } catch {}
     }
     return allSkills.map((s) => ({
       id: s.id,
@@ -714,7 +857,20 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
 
   ipcMain.handle('skill:update', safeHandle(async (_, id: string, data: any) => {
     const existing = await db.select().from(skills).where(eq(skills.id, id)).get()
-    if (!existing) throw new Error('Skill not found')
+    if (!existing) {
+      const builtin = getAllSkills().find((skill) => skill.id === id)
+      if (!builtin) throw new Error('Skill not found')
+
+      await db.insert(skills).values({
+        id,
+        name: builtin.manifest.name,
+        manifest: JSON.stringify(builtin.manifest),
+        enabled: data.enabled ?? builtin.enabled,
+        installedAt: Date.now(),
+      })
+      persistDatabase()
+      return undefined
+    }
 
     const newManifest = data.manifest ? JSON.stringify(data.manifest) : existing.manifest
     const newName = data.manifest?.name ?? existing.name
@@ -732,6 +888,82 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
   ipcMain.handle('skill:delete', safeHandle(async (_, id: string) => {
     removeSkill(id)
     await db.delete(skills).where(eq(skills.id, id))
+    persistDatabase()
+    return undefined
+  }))
+
+  // --- Agents ---------------------------------------------------------------
+
+  ipcMain.handle('agent:list', safeHandle(async () => {
+    return await listAgents()
+  }))
+
+  ipcMain.handle('agent:create', safeHandle(async (_, data: any) => {
+    const now = Date.now()
+    const agent = {
+      id: data.id ?? uuid(),
+      name: data.name ?? 'New Agent',
+      description: data.description ?? 'Custom LocalMind agent',
+      systemPrompt: data.systemPrompt ?? '',
+      icon: data.icon ?? 'smart_toy',
+      category: data.category ?? 'Custom',
+      enabled: data.enabled ?? true,
+      builtIn: false,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    await db.insert(agents).values(agent)
+    persistDatabase()
+    return agent
+  }))
+
+  ipcMain.handle('agent:update', safeHandle(async (_, id: string, data: any) => {
+    const allAgents = await listAgents()
+    const existing = allAgents.find((agent) => agent.id === id)
+    if (!existing) throw new Error('Agent not found')
+
+    const now = Date.now()
+    const next = {
+      id,
+      name: data.name ?? existing.name,
+      description: data.description ?? existing.description,
+      systemPrompt: data.systemPrompt ?? existing.systemPrompt,
+      icon: data.icon ?? existing.icon ?? null,
+      category: data.category ?? existing.category,
+      enabled: data.enabled ?? existing.enabled,
+      builtIn: existing.builtIn ?? false,
+      createdAt: existing.createdAt || now,
+      updatedAt: now,
+    }
+
+    const dbExisting = await db.select().from(agents).where(eq(agents.id, id)).get()
+    if (dbExisting) {
+      await db.update(agents).set(next).where(eq(agents.id, id))
+    } else {
+      await db.insert(agents).values(next)
+    }
+    persistDatabase()
+    return undefined
+  }))
+
+  ipcMain.handle('agent:delete', safeHandle(async (_, id: string) => {
+    const existing = (await listAgents()).find((agent) => agent.id === id)
+    if (existing?.builtIn) {
+      const disabledAgent = {
+        ...existing,
+        enabled: false,
+        updatedAt: Date.now(),
+      }
+      const dbExisting = await db.select().from(agents).where(eq(agents.id, id)).get()
+      if (dbExisting) {
+        await db.update(agents).set(disabledAgent).where(eq(agents.id, id))
+      } else {
+        await db.insert(agents).values(disabledAgent)
+      }
+    } else {
+      await db.delete(agents).where(eq(agents.id, id))
+    }
     persistDatabase()
     return undefined
   }))
@@ -921,4 +1153,67 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
       log.error('init', `Failed to reconnect MCP servers: ${err.message}`)
     }
   })()
+}
+
+async function getAllSkillsForTools() {
+  const builtinSkills = getAllSkills()
+  const dbSkills = await db.select().from(skills)
+  const allSkills = [...builtinSkills]
+  for (const dbs of dbSkills) {
+    try {
+      const manifest = JSON.parse(dbs.manifest)
+      const existingIndex = allSkills.findIndex((s) => s.id === dbs.id)
+      const value = {
+        id: dbs.id,
+        manifest,
+        systemPrompt: manifest.systemPrompt ?? '',
+        enabled: dbs.enabled ?? true,
+        installedAt: dbs.installedAt,
+      }
+      if (existingIndex >= 0) allSkills[existingIndex] = { ...allSkills[existingIndex], ...value }
+      else allSkills.push(value)
+    } catch {}
+  }
+  return allSkills.map((skill) => ({
+    id: skill.id,
+    name: skill.manifest.name,
+    description: skill.manifest.description,
+    parameters: skill.manifest.parameters,
+    enabled: skill.enabled,
+  }))
+}
+
+async function executeSkillToolCall(toolCall: ToolCall, request: LLMRequest): Promise<{ role: 'tool'; content: string; toolCallId: string }> {
+  const enabledSkills = await getAllSkillsForTools()
+  const skill = enabledSkills.find((item) => `skill__${item.id.replace(/[^a-zA-Z0-9_]/g, '_')}` === toolCall.name)
+  if (!skill) {
+    return {
+      role: 'tool',
+      content: JSON.stringify({ error: `Skill tool not found: ${toolCall.name}` }),
+      toolCallId: toolCall.id,
+    }
+  }
+
+  let args: Record<string, any> = {}
+  try {
+    args = JSON.parse(toolCall.arguments || '{}')
+  } catch {
+    args = {}
+  }
+
+  try {
+    const chunks = []
+    for await (const chunk of runSkill({
+      skillId: skill.id,
+      messages: [{ role: 'user', content: String(args.input ?? '') }],
+      model: request.model,
+      provider: request.provider,
+      parameters: args.parameters,
+    })) {
+      chunks.push(chunk)
+    }
+    return { role: 'tool', content: JSON.stringify({ skillId: skill.id, result: chunks }), toolCallId: toolCall.id }
+  } catch (err: any) {
+    return { role: 'tool', content: JSON.stringify({ error: err.message ?? 'Skill execution failed' }), toolCallId: toolCall.id }
+  }
 }

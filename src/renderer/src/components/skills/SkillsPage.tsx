@@ -52,8 +52,9 @@ export function SkillsPage() {
       const api = (window as any).localmind?.skill
       if (api?.list) {
         const result = await api.list()
-        if (Array.isArray(result) && result.length > 0) {
-          setSkills(result)
+        const skillList = Array.isArray(result) ? result : result?.data
+        if (Array.isArray(skillList) && skillList.length > 0) {
+          setSkills(skillList)
         } else {
           setSkills(fallbackSkills)
         }

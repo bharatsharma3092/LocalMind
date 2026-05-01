@@ -15,21 +15,44 @@ interface Props {
   onClose: () => void
 }
 
+const fallbackSkills: Skill[] = [
+  { id: 'dev.api-doc-writer', name: 'API Doc Writer', description: 'Generate OpenAPI specs and documentation from code', icon: 'file_text', category: 'Development', enabled: true },
+  { id: 'dev.code-reviewer', name: 'Code Reviewer', description: 'Review code for bugs, maintainability, and missing tests', icon: 'code', category: 'Development', enabled: true },
+  { id: 'qa.bug-analysis', name: 'Bug Analysis Agent', description: 'Find likely root causes from logs, errors, and screenshots', icon: 'bug_report', category: 'QA', enabled: true },
+  { id: 'data.sql-builder', name: 'SQL Builder', description: 'Create SQL queries from natural language and schema context', icon: 'database', category: 'Data', enabled: true },
+]
+
 export function SkillLauncher({ onSelect, onClose }: Props) {
   const [skills, setSkills] = useState<Skill[]>([])
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (!window.localmind?.skill?.list) {
+      setSkills(fallbackSkills)
+      return
+    }
     window.localmind.skill.list().then((res) => {
       if (res.success && res.data) setSkills(res.data.filter((s: Skill) => s.enabled))
-    })
+    }).catch(() => setSkills([]))
   }, [])
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        onClose()
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [onClose])
 
   const filtered = skills.filter((s) => {
     if (!query) return true
@@ -64,13 +87,12 @@ export function SkillLauncher({ onSelect, onClose }: Props) {
   )
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-start justify-center pt-[20vh] z-50" onClick={onClose}>
-      <div
-        className="bg-surface border border-border rounded-xl shadow-2xl w-full max-w-lg overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-          <span className="text-text-muted text-lg">/</span>
+    <div
+      ref={panelRef}
+      className="w-full min-w-0 overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-low shadow-2xl"
+    >
+        <div className="flex items-center gap-3 border-b border-outline-variant px-4 py-3">
+          <span className="text-lg text-on-surface-variant">/</span>
           <input
             ref={inputRef}
             type="text"
@@ -78,16 +100,16 @@ export function SkillLauncher({ onSelect, onClose }: Props) {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search skills..."
-            className="flex-1 bg-transparent text-sm text-text outline-none placeholder:text-text-muted"
+            className="flex-1 bg-transparent text-sm text-on-surface outline-none placeholder:text-on-surface-variant"
           />
-          <kbd className="text-xs text-text-muted bg-surface-offset border border-border px-1.5 py-0.5 rounded">
+          <kbd className="rounded border border-outline-variant bg-surface-container px-1.5 py-0.5 text-xs text-on-surface-variant">
             Esc
           </kbd>
         </div>
 
-        <div className="max-h-80 overflow-y-auto">
+        <div className="max-h-[360px] overflow-y-auto py-1">
           {filtered.length === 0 ? (
-            <div className="px-4 py-8 text-center text-sm text-text-muted">
+            <div className="px-4 py-8 text-center text-sm text-on-surface-variant">
               No skills found
             </div>
           ) : (
@@ -96,23 +118,25 @@ export function SkillLauncher({ onSelect, onClose }: Props) {
                 key={skill.id}
                 onClick={() => onSelect(skill)}
                 onMouseEnter={() => setSelectedIndex(i)}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+                className={`grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left transition-colors ${
                   i === selectedIndex
-                    ? 'bg-accent/10 text-text'
-                    : 'text-text-muted hover:bg-surface-offset hover:text-text'
+                    ? 'bg-primary-container/10 text-on-surface'
+                    : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
                 }`}
               >
-                <span className="text-lg w-8 text-center flex-shrink-0">
-                  {skill.icon ?? '⚡'}
+                <span className="text-lg w-8 text-center">
+                  <span className="material-symbols-outlined text-[20px]">
+                    {skill.icon ?? 'bolt'}
+                  </span>
                 </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{skill.name}</p>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold leading-5 text-on-surface">{skill.name}</p>
                   {skill.description && (
-                    <p className="text-xs text-text-muted truncate">{skill.description}</p>
+                    <p className="mt-0.5 text-xs leading-4 text-on-surface-variant line-clamp-2">{skill.description}</p>
                   )}
                 </div>
                 {skill.category && (
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-surface-offset border border-border text-text-muted flex-shrink-0">
+                  <span className="max-w-28 truncate rounded-full border border-outline-variant bg-surface-container px-2 py-0.5 text-xs text-on-surface-variant">
                     {skill.category}
                   </span>
                 )}
@@ -120,7 +144,6 @@ export function SkillLauncher({ onSelect, onClose }: Props) {
             ))
           )}
         </div>
-      </div>
     </div>
   )
 }

@@ -15,16 +15,16 @@ export function McpPermissionDialog() {
     const handler = (_: any, data: ApprovalRequest) => {
       setPending(data)
     }
-    window.localmind.mcp.onApprovalRequest?.(handler)
+    window.localmind?.mcp?.onApprovalRequest?.(handler)
     return () => {
-      window.localmind.mcp.offApprovalRequest?.(handler)
+      window.localmind?.mcp?.offApprovalRequest?.(handler)
     }
   }, [])
 
   if (!pending) return null
 
   const handleDecision = async (decision: 'approved' | 'denied' | 'always') => {
-    await window.localmind.mcp.approveTool(pending.approvalId, decision)
+    await window.localmind?.mcp?.approveTool?.(pending.approvalId, decision)
     setPending(null)
   }
 

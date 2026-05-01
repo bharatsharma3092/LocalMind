@@ -64,6 +64,19 @@ export const skills = sqliteTable('skills', {
   installedAt: integer('installed_at').notNull(),
 })
 
+export const agents = sqliteTable('agents', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description').notNull(),
+  systemPrompt: text('system_prompt').notNull(),
+  icon: text('icon'),
+  category: text('category').notNull(),
+  enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  builtIn: integer('built_in', { mode: 'boolean' }).default(false),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+})
+
 export const personas = sqliteTable('personas', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
