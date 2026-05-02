@@ -226,7 +226,7 @@ export interface UrlApi {
 }
 
 export interface WebSearchApi {
-  search: (query: string) => Promise<any>
+  search: (query: string) => Promise<IPCResponse<{ success: boolean; results: Array<{ title: string; url: string; snippet: string }>; error?: string }>>
   getProvider: () => Promise<IPCResponse<string | null>>
   setProvider: (provider: string) => Promise<IPCResponse<void>>
   getEnabled: () => Promise<IPCResponse<boolean>>

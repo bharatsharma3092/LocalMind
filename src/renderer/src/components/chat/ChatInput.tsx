@@ -238,11 +238,14 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
       try {
         if (window.localmind?.websearch?.search) {
           const res = await window.localmind.websearch.search(content)
-          if (res.success && res.results && res.results.length > 0) {
-            const searchResults = res.results.map((r: any, i: number) =>
+          const searchData = res.data ?? res
+          if (searchData.success && searchData.results && searchData.results.length > 0) {
+            const searchResults = searchData.results.map((r: any, i: number) =>
               `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`
             ).join('\n\n')
             finalContent = `Web search results for "${content}":\n\n${searchResults}\n\nUser query: ${finalContent}`
+          } else if (!searchData.success) {
+            finalContent = `Web search failed for "${content}": ${searchData.error ?? 'Unknown error'}\n\nUser query: ${finalContent}`
           }
         }
       } catch (err) {

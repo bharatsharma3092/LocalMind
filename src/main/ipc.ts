@@ -14,7 +14,7 @@ import type { LLMRequest, LLMStreamChunk } from './llm/types'
 import type { ToolCall } from '@shared/types/localmind-api'
 import { mcpHostManager, type MCPServerConfig, reconnectSavedServers } from './mcp/host-manager'
 import { registerApprovalIpcHandlers } from './mcp/approval'
-import { getMcpToolsAsLlmTools, getLocalWorkspaceTools, getSkillTools, executeMcpToolCall, executeLocalToolCall, isMcpToolName, isLocalToolName } from './llm/tool-executor'
+import { getMcpToolsAsLlmTools, getLocalWorkspaceTools, getSkillTools, getWebSearchTools, executeMcpToolCall, executeLocalToolCall, executeWebSearchToolCall, isMcpToolName, isLocalToolName, isWebSearchToolName } from './llm/tool-executor'
 import { loadBuiltinSkills, getAllSkills, addSkill, removeSkill, type SkillManifest } from './skills/loader'
 import { runSkill } from './skills/runner'
 import { extractFileContent, extractFolderContents } from './files/extractor'
@@ -144,21 +144,21 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('websearch:getProvider', safeHandle(async () => {
     const provider = appStore.get('webSearchProvider') as WebSearchProvider | undefined
-    return { success: true, data: provider ?? null }
+    return provider ?? null
   }))
 
   ipcMain.handle('websearch:setProvider', safeHandle(async (_, provider: WebSearchProvider) => {
     appStore.set('webSearchProvider', provider)
-    return { success: true }
+    return undefined
   }))
 
   ipcMain.handle('websearch:getEnabled', safeHandle(async () => {
-    return { success: true, data: appStore.get('webSearchEnabled') ?? false }
+    return appStore.get('webSearchEnabled') ?? false
   }))
 
   ipcMain.handle('websearch:setEnabled', safeHandle(async (_, enabled: boolean) => {
     appStore.set('webSearchEnabled', enabled)
-    return { success: true }
+    return undefined
   }))
 
   ipcMain.handle('agent:approveTool', safeHandle(async (_, approvalId: string, decision: string) => {
@@ -263,7 +263,8 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         const localTools = isToolAgent ? getLocalWorkspaceTools() : []
         const enabledSkills = isToolAgent ? (await getAllSkillsForTools()) : []
         const skillTools = isToolAgent ? getSkillTools(enabledSkills) : []
-        const availableTools = [...mcpTools, ...localTools, ...skillTools]
+        const webSearchTools = getWebSearchTools()
+        const availableTools = [...mcpTools, ...localTools, ...skillTools, ...webSearchTools]
         if (availableTools.length > 0) {
           log.info('startStream', `Injecting ${availableTools.length} tools into request`, {
             streamId,
@@ -406,6 +407,16 @@ export function registerIpcHandlers(win: BrowserWindow): void {
                 })
                 return decision === 'approved'
               })
+            } else if (isWebSearchToolName(tc.name)) {
+              log.info('startStream', `Executing web search tool: ${tc.name}`, { streamId })
+              const resultChunk: LLMStreamChunk = {
+                type: 'tool_result',
+                toolCall: tc,
+                content: 'Searching...',
+              }
+              sendChunk(browserWin, streamId, resultChunk)
+
+              toolResult = await executeWebSearchToolCall(tc)
             } else if (tc.name.startsWith('skill__')) {
               log.info('startStream', `Executing LocalMind skill tool: ${tc.name}`, { streamId })
               const resultChunk: LLMStreamChunk = {

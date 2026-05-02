@@ -1,5 +1,6 @@
 import { mcpHostManager } from '../mcp/host-manager'
 import { extractFileContent } from '../files/extractor'
+import { searchWeb } from '../websearch/service'
 import type { ToolDefinition, ToolCall } from '@shared/types/localmind-api'
 import { execFile } from 'child_process'
 import { promises as fs } from 'fs'
@@ -249,6 +250,25 @@ export function getSkillTools(skills: Array<{ id: string; name: string; descript
     }))
 }
 
+export function getWebSearchTools(): ToolDefinition[] {
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'web__search',
+        description: 'Search the web for current or recent information. Use this when the user asks for latest news, current facts, prices, schedules, or anything that may have changed recently.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'The web search query.' },
+          },
+        },
+      },
+    },
+  ]
+}
+
 export async function getMcpToolsAsLlmTools(): Promise<ToolDefinition[]> {
   const mcpTools = await mcpHostManager.listAllTools()
   if (mcpTools.length === 0) return []
@@ -324,6 +344,37 @@ export function isMcpToolName(name: string): boolean {
 
 export function isLocalToolName(name: string): boolean {
   return name.startsWith('local__')
+}
+
+export function isWebSearchToolName(name: string): boolean {
+  return name === 'web__search'
+}
+
+export async function executeWebSearchToolCall(
+  toolCall: ToolCall
+): Promise<{ role: 'tool'; content: string; toolCallId: string }> {
+  let args: Record<string, any> = {}
+  try {
+    args = JSON.parse(toolCall.arguments || '{}')
+  } catch {
+    args = {}
+  }
+
+  const query = String(args.query ?? '').trim()
+  if (!query) {
+    return {
+      role: 'tool',
+      content: JSON.stringify({ error: 'query is required' }),
+      toolCallId: toolCall.id,
+    }
+  }
+
+  const result = await searchWeb(query)
+  return {
+    role: 'tool',
+    content: JSON.stringify(result),
+    toolCallId: toolCall.id,
+  }
 }
 
 export async function executeLocalToolCall(
