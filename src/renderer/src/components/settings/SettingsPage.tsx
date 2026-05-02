@@ -7,7 +7,8 @@ import { PersonaLibrary } from '../personas/PersonaLibrary'
 
 type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' | 'sunset' | 'gold' | 'copper'
 type WebSearchProvider = 'tavily' | 'serper' | 'exa' | 'duckduckgo'
-type SettingsTab = 'general' | 'models' | 'mcp' | 'personas' | 'data'
+type SettingsTab = 'general' | 'profile' | 'memory' | 'models' | 'mcp' | 'personas' | 'data'
+type MemoryEntry = { id: string; content: string; source: string; enabled: boolean; createdAt: number }
 
 const colorOptions: { id: ColorTheme; label: string; hex: string }[] = [
   { id: 'default', label: 'Indigo', hex: '#6c5ce7' },
@@ -27,6 +28,8 @@ function generateId(): string {
 
 const tabLabels: Record<SettingsTab, string> = {
   general: 'General',
+  profile: 'Profile',
+  memory: 'Memory',
   models: 'Models',
   mcp: 'MCP Servers',
   personas: 'Personas',
@@ -37,7 +40,7 @@ export function SettingsPage({
   onClose,
   initialTab = 'general',
 }: {
-  onClose: () => void
+  onClose?: () => void
   initialTab?: SettingsTab
 }) {
   const { theme, colorTheme, privacyMode, webSearchEnabled, webSearchProvider, setTheme, setColorTheme, setPrivacyMode, setWebSearchEnabled, setWebSearchProvider } = useSettingsStore()
@@ -57,6 +60,15 @@ export function SettingsPage({
   const [recordingShortcut, setRecordingShortcut] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [dataStatus, setDataStatus] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [email, setEmail] = useState('')
+  const [authProvider, setAuthProvider] = useState<'local' | 'google' | 'github' | 'microsoft' | null>(null)
+  const [memoryEnabled, setMemoryEnabled] = useState(true)
+  const [memories, setMemories] = useState<MemoryEntry[]>([])
+  const [memoryDraft, setMemoryDraft] = useState('')
+  const [memoryImportText, setMemoryImportText] = useState('')
+  const [memoryStatus, setMemoryStatus] = useState('')
 
   const [editingProvider, setEditingProvider] = useState<CustomProviderConfig | null>(null)
   const [newProviderName, setNewProviderName] = useState('')
@@ -64,6 +76,9 @@ export function SettingsPage({
   const [newProviderKey, setNewProviderKey] = useState('')
   const [newModelId, setNewModelId] = useState('')
   const [newModelName, setNewModelName] = useState('')
+  const [fetchedModels, setFetchedModels] = useState<{ id: string; name: string; selected: boolean }[]>([])
+  const [fetchingModels, setFetchingModels] = useState(false)
+  const [modelFetchStatus, setModelFetchStatus] = useState('')
 
   useEffect(() => {
     window.localmind.settings.get('ollamaUrl').then((r) => {
@@ -89,6 +104,19 @@ export function SettingsPage({
     })
     window.localmind.secrets.get('exa-api-key').then((r) => {
       if (r.success && r.data) setExaKey(r.data)
+    })
+    window.localmind.settings.get('userProfile').then((r) => {
+      if (r.success && r.data) {
+        setDisplayName(r.data.displayName ?? '')
+        setEmail(r.data.email ?? '')
+        setAuthProvider(r.data.authProvider ?? null)
+      }
+    })
+    window.localmind.settings.get('memoryEnabled').then((r) => {
+      if (r.success && typeof r.data === 'boolean') setMemoryEnabled(r.data)
+    })
+    window.localmind.settings.get('memories').then((r) => {
+      if (r.success && Array.isArray(r.data)) setMemories(r.data)
     })
   }, [])
 
@@ -137,6 +165,8 @@ export function SettingsPage({
     setNewProviderKey('')
     setNewModelId('')
     setNewModelName('')
+    setFetchedModels([])
+    setModelFetchStatus('')
   }
 
   const startEditProvider = (cp: CustomProviderConfig) => {
@@ -146,6 +176,8 @@ export function SettingsPage({
     setNewProviderKey('')
     setNewModelId('')
     setNewModelName('')
+    setFetchedModels([])
+    setModelFetchStatus('')
     window.localmind.secrets.get(`custom-provider-${cp.id}-api-key`).then((r) => {
       if (r.success && r.data) setNewProviderKey(r.data)
     })
@@ -153,10 +185,21 @@ export function SettingsPage({
 
   const saveProvider = async () => {
     if (!editingProvider || !newProviderName.trim()) return
+    const selectedFetchedModels = fetchedModels
+      .filter((model) => model.selected)
+      .map((model) => ({ id: model.id, name: model.name || model.id }))
+    const fetchedIds = new Set(fetchedModels.map((model) => model.id))
+    const mergedModels = [...selectedFetchedModels]
+    for (const model of editingProvider.models) {
+      if (!fetchedIds.has(model.id) && !mergedModels.some((item) => item.id === model.id)) {
+        mergedModels.push(model)
+      }
+    }
     const updated: CustomProviderConfig = {
       ...editingProvider,
       name: newProviderName.trim(),
       baseUrl: newProviderUrl.trim() || 'http://localhost:8080/v1',
+      models: mergedModels,
     }
     if (newProviderKey) {
       await window.localmind.secrets.set(`custom-provider-${updated.id}-api-key`, newProviderKey)
@@ -200,6 +243,30 @@ export function SettingsPage({
     await saveCustomProviders(newList)
   }
 
+  const fetchModelsForEditingProvider = async () => {
+    setFetchingModels(true)
+    setModelFetchStatus('')
+    try {
+      const res = await window.localmind.llm.fetchCustomModels({
+        baseUrl: newProviderUrl.trim(),
+        apiKey: newProviderKey.trim() || undefined,
+      })
+      if (!res.success || !res.data) {
+        setModelFetchStatus(res.error ?? 'Unable to fetch models.')
+        return
+      }
+      const existingIds = new Set(editingProvider?.models.map((model) => model.id) ?? [])
+      const next = res.data.map((model) => ({
+        ...model,
+        selected: existingIds.has(model.id) || existingIds.size === 0,
+      }))
+      setFetchedModels(next)
+      setModelFetchStatus(next.length ? `Found ${next.length} model${next.length === 1 ? '' : 's'}.` : 'No models returned by this provider.')
+    } finally {
+      setFetchingModels(false)
+    }
+  }
+
   const removeModelFromEditing = async (modelId: string) => {
     if (!editingProvider) return
     const updated: CustomProviderConfig = {
@@ -219,8 +286,10 @@ export function SettingsPage({
 
   const handleExportAll = async () => {
     setExporting(true)
+    setDataStatus('')
     try {
-      await window.localmind.data.exportAll()
+      const res = await window.localmind.data.exportAll()
+      setDataStatus(res.success && res.data ? `Exported to ${res.data}` : res.error ?? 'Export failed')
     } finally {
       setExporting(false)
     }
@@ -229,13 +298,16 @@ export function SettingsPage({
   const handleImportAll = async () => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.zip'
+    input.accept = '.json'
     input.onchange = async () => {
       const file = input.files?.[0]
-      if (file && file.path) {
+      const filePath = file ? window.localmind?.file?.getPathForFile?.(file) : null
+      if (filePath) {
         setImporting(true)
+        setDataStatus('')
         try {
-          await window.localmind.data.importAll(file.path)
+          const res = await window.localmind.data.importAll(filePath)
+          setDataStatus(res.success && res.data?.imported ? 'Import complete. Restart or refresh lists to see all restored data.' : res.data?.error ?? res.error ?? 'Import failed')
         } finally {
           setImporting(false)
         }
@@ -244,20 +316,92 @@ export function SettingsPage({
     input.click()
   }
 
+  const saveProfile = async (provider: typeof authProvider = authProvider) => {
+    await window.localmind.settings.set('userProfile', {
+      displayName: displayName.trim(),
+      email: email.trim(),
+      authProvider: provider,
+    })
+    setAuthProvider(provider)
+  }
+
+  const saveMemories = async (nextMemories: MemoryEntry[], nextEnabled = memoryEnabled) => {
+    setMemories(nextMemories)
+    await window.localmind.settings.set('memories', nextMemories)
+    await window.localmind.settings.set('memoryEnabled', nextEnabled)
+  }
+
+  const addMemory = async (content: string, source = 'manual') => {
+    const cleaned = content.trim()
+    if (!cleaned) return
+    const next = [
+      {
+        id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+        content: cleaned.replace(/^\s*[-*]\s*/, ''),
+        source,
+        enabled: true,
+        createdAt: Date.now(),
+      },
+      ...memories,
+    ]
+    await saveMemories(next)
+    setMemoryDraft('')
+  }
+
+  const importMemoriesFromText = async () => {
+    const entries = memoryImportText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('```'))
+      .map((line) => line.replace(/^\[[^\]]+\]\s*-\s*/, '').replace(/^\s*[-*]\s*/, '').trim())
+      .filter(Boolean)
+
+    if (entries.length === 0) {
+      setMemoryStatus('Paste exported memory text first.')
+      return
+    }
+
+    const imported = entries.map((content) => ({
+      id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      content,
+      source: 'import',
+      enabled: true,
+      createdAt: Date.now(),
+    }))
+    await saveMemories([...imported, ...memories])
+    setMemoryImportText('')
+    setMemoryStatus(`Imported ${imported.length} memories.`)
+  }
+
+  const importMemoryFile = async () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.txt,.md,.json'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      setMemoryImportText(await file.text())
+      setMemoryStatus(`Loaded ${file.name}. Review and click Import.`)
+    }
+    input.click()
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-6">
-      <div className="bg-surface-container rounded-2xl shadow-2xl w-[640px] max-w-full max-h-[85vh] flex flex-col border border-outline-variant overflow-hidden">
+    <div className={onClose ? 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-6' : 'h-full min-h-0 overflow-hidden bg-background p-6'}>
+      <div className={onClose ? 'bg-surface-container rounded-2xl shadow-2xl w-[640px] max-w-full max-h-[85vh] flex flex-col border border-outline-variant overflow-hidden' : 'mx-auto flex h-full max-w-6xl flex-col overflow-hidden border border-outline-variant bg-surface-container'}>
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-outline-variant flex-shrink-0">
           <h2 className="text-xl font-bold text-on-surface">Settings</h2>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface p-1 rounded-lg hover:bg-surface-container-high transition-colors">
-            <span className="material-symbols-outlined">close</span>
-          </button>
+          {onClose && (
+            <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface p-1 rounded-lg hover:bg-surface-container-high transition-colors">
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          )}
         </div>
 
         {/* Tabs - fixed height, no vertical scroll */}
         <div className="flex gap-1 px-5 pt-4 border-b border-outline-variant overflow-x-auto overflow-y-hidden flex-shrink-0 h-[52px]">
-          {(['general', 'models', 'mcp', 'personas', 'data'] as const).map((t) => (
+          {(['general', 'profile', 'memory', 'models', 'mcp', 'personas', 'data'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -510,6 +654,155 @@ export function SettingsPage({
                 </div>
               </section>
             </>
+          ) : tab === 'profile' ? (
+            <section className="space-y-5">
+              <div>
+                <h3 className="text-[12px] font-semibold text-on-surface-variant uppercase tracking-wider mb-3">User Profile</h3>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="text-xs text-on-surface-variant">Name</label>
+                    <input
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="Your name"
+                      className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-on-surface-variant">Email</label>
+                    <input
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={() => saveProfile()}
+                  className="mt-4 rounded-lg bg-primary-container px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
+                >
+                  Save Profile
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
+                <h4 className="text-sm font-semibold text-on-surface">Account login</h4>
+                <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                  LocalMind stores this profile locally. OAuth buttons mark the account provider for now; production sign-in needs provider client IDs and redirect configuration.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {([
+                    ['google', 'Gmail'],
+                    ['github', 'GitHub'],
+                    ['microsoft', 'Microsoft'],
+                  ] as const).map(([provider, label]) => (
+                    <button
+                      key={provider}
+                      onClick={() => saveProfile(provider)}
+                      className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                        authProvider === provider
+                          ? 'border-primary bg-primary-container/20 text-on-surface'
+                          : 'border-outline-variant bg-surface-container text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      Continue with {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+          ) : tab === 'memory' ? (
+            <section className="space-y-5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-[12px] font-semibold text-on-surface-variant uppercase tracking-wider">Memory</h3>
+                  <p className="mt-1 text-xs text-on-surface-variant">Enabled memories are added to chat and agent context locally.</p>
+                </div>
+                <button
+                  onClick={async () => {
+                    const next = !memoryEnabled
+                    setMemoryEnabled(next)
+                    await window.localmind.settings.set('memoryEnabled', next)
+                  }}
+                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${memoryEnabled ? 'bg-primary-container text-white' : 'bg-surface-container-low text-on-surface-variant'}`}
+                >
+                  {memoryEnabled ? 'Memory On' : 'Memory Off'}
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
+                <h4 className="text-sm font-semibold text-on-surface">Add memory</h4>
+                <textarea
+                  value={memoryDraft}
+                  onChange={(e) => setMemoryDraft(e.target.value)}
+                  placeholder="Example: I prefer concise engineering answers with exact file references."
+                  rows={3}
+                  className="mt-3 w-full resize-none rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                />
+                <button
+                  onClick={() => addMemory(memoryDraft)}
+                  className="mt-3 rounded-lg bg-primary-container px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
+                >
+                  Add to Memory
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-semibold text-on-surface">Import from another AI app</h4>
+                  <button onClick={importMemoryFile} className="rounded-lg border border-outline-variant px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-on-surface">
+                    Load File
+                  </button>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-on-surface-variant">
+                  Paste exported memories from Claude, ChatGPT, Gemini, Copilot, or any assistant. Lines like “[date] - memory” are imported as separate entries.
+                </p>
+                <textarea
+                  value={memoryImportText}
+                  onChange={(e) => setMemoryImportText(e.target.value)}
+                  placeholder="Paste exported memory text here..."
+                  rows={6}
+                  className="mt-3 w-full resize-y rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                />
+                <div className="mt-3 flex items-center gap-3">
+                  <button onClick={importMemoriesFromText} className="rounded-lg bg-primary-container px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">
+                    Import Memories
+                  </button>
+                  {memoryStatus && <span className="text-xs text-on-surface-variant">{memoryStatus}</span>}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {memories.length === 0 ? (
+                  <p className="text-sm text-on-surface-variant">No memories saved yet.</p>
+                ) : memories.map((memory) => (
+                  <div key={memory.id} className="rounded-lg border border-outline-variant bg-surface-container-low p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-sm leading-6 text-on-surface">{memory.content}</p>
+                      <div className="flex shrink-0 gap-2">
+                        <button
+                          onClick={() => {
+                            const next = memories.map((item) => item.id === memory.id ? { ...item, enabled: !item.enabled } : item)
+                            saveMemories(next)
+                          }}
+                          className="rounded border border-outline-variant px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface"
+                        >
+                          {memory.enabled ? 'Enabled' : 'Disabled'}
+                        </button>
+                        <button
+                          onClick={() => saveMemories(memories.filter((item) => item.id !== memory.id))}
+                          className="rounded border border-outline-variant px-2 py-1 text-xs text-on-surface-variant hover:text-error"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[11px] uppercase tracking-wider text-on-surface-variant/70">{memory.source}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
           ) : tab === 'models' ? (
             <>
               <section>
@@ -622,6 +915,57 @@ export function SettingsPage({
 
                     <div>
                       <label className="text-xs text-on-surface-variant">Models</label>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={fetchModelsForEditingProvider}
+                          disabled={fetchingModels || !newProviderUrl.trim()}
+                          className="rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-on-surface disabled:opacity-40"
+                        >
+                          {fetchingModels ? 'Fetching...' : 'Fetch Models'}
+                        </button>
+                        {fetchedModels.length > 0 && (
+                          <>
+                            <button
+                              onClick={() => setFetchedModels((models) => models.map((model) => ({ ...model, selected: true })))}
+                              className="rounded-lg border border-outline-variant px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-on-surface"
+                            >
+                              Select All
+                            </button>
+                            <button
+                              onClick={() => setFetchedModels((models) => models.map((model) => ({ ...model, selected: false })))}
+                              className="rounded-lg border border-outline-variant px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-on-surface"
+                            >
+                              Clear
+                            </button>
+                          </>
+                        )}
+                        {modelFetchStatus && <span className="text-xs text-on-surface-variant">{modelFetchStatus}</span>}
+                      </div>
+
+                      {fetchedModels.length > 0 && (
+                        <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-outline-variant bg-surface-container-low p-2">
+                          {fetchedModels.map((model) => (
+                            <label
+                              key={model.id}
+                              className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm text-on-surface-variant hover:bg-surface-container"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={model.selected}
+                                onChange={() => {
+                                  setFetchedModels((models) =>
+                                    models.map((item) => item.id === model.id ? { ...item, selected: !item.selected } : item)
+                                  )
+                                }}
+                                className="h-4 w-4 accent-primary"
+                              />
+                              <span className="min-w-0 flex-1 truncate">{model.name || model.id}</span>
+                              <span className="truncate font-mono text-[11px] text-on-surface-variant/70">{model.id}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+
                       <div className="space-y-1.5 mt-1 mb-2">
                         {editingProvider.models.map((m) => (
                           <div key={m.id} className="flex items-center justify-between bg-surface-container-low border border-outline-variant rounded-lg px-3 py-1.5">
@@ -697,7 +1041,7 @@ export function SettingsPage({
                 <div className="bg-surface-container-low border border-outline-variant rounded-xl p-4">
                   <h4 className="text-sm font-semibold text-on-surface mb-1">Export All Data</h4>
                   <p className="text-xs text-on-surface-variant mb-3">
-                    Download a ZIP archive of all conversations, settings, and configurations.
+                    Export all conversations, settings, memories, personas, skills, and MCP server records as a JSON backup.
                   </p>
                   <button
                     onClick={handleExportAll}
@@ -711,16 +1055,19 @@ export function SettingsPage({
                 <div className="bg-surface-container-low border border-outline-variant rounded-xl p-4">
                   <h4 className="text-sm font-semibold text-on-surface mb-1">Import Data</h4>
                   <p className="text-xs text-on-surface-variant mb-3">
-                    Restore from a previously exported ZIP archive.
+                    Restore from a previously exported LocalMind JSON backup.
                   </p>
                   <button
                     onClick={handleImportAll}
                     disabled={importing}
                     className="px-4 py-2 bg-surface-bright border border-outline-variant text-on-surface rounded-lg text-sm font-semibold hover:bg-surface-container-high disabled:opacity-50 transition-colors"
                   >
-                    {importing ? 'Importing...' : 'Import from ZIP'}
+                    {importing ? 'Importing...' : 'Import from JSON'}
                   </button>
                 </div>
+                {dataStatus && (
+                  <p className="text-xs leading-5 text-on-surface-variant">{dataStatus}</p>
+                )}
               </div>
             </section>
           )}

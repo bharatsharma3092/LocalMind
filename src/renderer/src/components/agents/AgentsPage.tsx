@@ -45,10 +45,29 @@ const quickStarts: Record<string, string[]> = {
   ],
 }
 
+const agentPowers: Record<string, string[]> = {
+  cowork: ['Plan', 'Review', 'Debug', 'Test', 'Coordinate'],
+  code: ['Glob', 'Grep', 'Read', 'Write', 'Delete', 'NPM', 'MCP', 'Skills'],
+}
+
+const toolAccessCopy: Record<string, string[]> = {
+  cowork: [
+    'Planning, review, debugging, lightweight implementation guidance, MCP tools, and Skills.',
+    'Destructive actions are reserved for the Code workspace.',
+  ],
+  code: [
+    'Glob, grep, read, write, npm scripts, MCP tools, and Skills.',
+    'Delete is available only after a confirmation prompt.',
+  ],
+}
+
+const EMPTY_MESSAGES: never[] = []
+
 export function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>(fallbackAgents)
   const [selectedAgentId, setSelectedAgentId] = useState('cowork')
   const [agentConversationIds, setAgentConversationIds] = useState<Record<string, string>>({})
+  const [workspacePath, setWorkspacePath] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const { createConversation, selectConversation } = useChatStore()
 
@@ -113,10 +132,22 @@ export function AgentsPage() {
   }, [selectedAgent, agentConversationIds, createConversation, selectConversation])
 
   const conversationId = selectedAgent ? agentConversationIds[selectedAgent.id] : null
+  const currentMessages = useChatStore((state) => conversationId ? state.messages[conversationId] ?? EMPTY_MESSAGES : EMPTY_MESSAGES)
+  const hasStartedConversation = currentMessages.length > 0
+  const selectedQuickStarts = quickStarts[selectedAgent?.id ?? 'cowork'] ?? quickStarts.cowork
+  const selectedPowers = agentPowers[selectedAgent?.id ?? 'cowork'] ?? agentPowers.cowork
+  const selectedToolAccess = toolAccessCopy[selectedAgent?.id ?? 'cowork'] ?? toolAccessCopy.cowork
+
+  const selectFolder = async () => {
+    const res = await window.localmind?.file?.selectFolder?.()
+    if (res?.success && res.data) {
+      setWorkspacePath(res.data)
+    }
+  }
 
   return (
-    <div className="flex h-full bg-background text-on-background">
-      <aside className="w-72 shrink-0 border-r border-outline-variant bg-surface-container-lowest p-4">
+    <div className="flex h-full min-h-0 bg-background text-on-background">
+      <aside className="w-72 shrink-0 overflow-y-auto border-r border-outline-variant bg-surface-container-lowest p-4">
         <div className="mb-6">
           <p className="text-[11px] font-bold uppercase tracking-widest text-primary">Agents</p>
           <h2 className="mt-1 text-2xl font-black text-on-surface">Workspaces</h2>
@@ -150,13 +181,27 @@ export function AgentsPage() {
         <div className="mt-6 rounded-xl border border-outline-variant bg-surface-container-low p-3">
           <p className="text-xs font-bold uppercase tracking-wider text-on-surface">Tool access</p>
           <div className="mt-3 space-y-2 text-xs leading-5 text-on-surface-variant">
-            <p>Glob, grep, read, write, npm scripts, MCP tools, and Skills.</p>
-            <p>Delete is available only after a confirmation prompt.</p>
+            {selectedToolAccess.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
           </div>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-outline-variant bg-surface-container-low p-3">
+          <p className="text-xs font-bold uppercase tracking-wider text-on-surface">Workspace folder</p>
+          <p className="mt-2 line-clamp-3 text-xs leading-5 text-on-surface-variant">
+            {workspacePath ?? 'No folder selected. Tools use the app workspace.'}
+          </p>
+          <button
+            onClick={selectFolder}
+            className="mt-3 w-full rounded-lg border border-primary-container/40 bg-primary-container/10 px-3 py-2 text-xs font-bold text-primary hover:bg-primary-container/20"
+          >
+            Select Folder
+          </button>
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex h-16 items-center justify-between border-b border-outline-variant bg-surface-container-low/80 px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-high text-primary">
@@ -176,14 +221,44 @@ export function AgentsPage() {
           </button>
         </header>
 
-        <section className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_320px]">
-          <div className="relative flex min-w-0 flex-col">
+        <section className="min-h-0 flex-1 overflow-hidden">
+          <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             {conversationId ? (
               <>
-                <MessageList conversationId={conversationId} />
+                {hasStartedConversation ? (
+                  <MessageList conversationId={conversationId} />
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-8 pb-40 pt-8">
+                    <div className="w-full max-w-3xl">
+                      <p className="text-center text-sm text-on-surface-variant">Send a message to start the conversation</p>
+                      <div className="mt-6 grid gap-3 md:grid-cols-3">
+                        {selectedQuickStarts.map((prompt) => (
+                          <div
+                            key={prompt}
+                            className="rounded-xl border border-outline-variant bg-surface-container-low p-4 text-sm leading-6 text-on-surface-variant"
+                          >
+                            {prompt}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-8 text-center">
+                        <h3 className="text-sm font-black uppercase tracking-widest text-on-surface">Powers</h3>
+                        <div className="mt-4 flex flex-wrap justify-center gap-2">
+                          {selectedPowers.map((item) => (
+                            <span key={item} className="rounded-full border border-outline-variant bg-surface-container px-2.5 py-1 text-xs font-bold text-on-surface-variant">
+                              {item}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <ChatInput
                   conversationId={conversationId}
                   forcedAgent={selectedAgent}
+                  workspacePath={workspacePath}
                   compactTools={true}
                 />
               </>
@@ -193,29 +268,6 @@ export function AgentsPage() {
               </div>
             )}
           </div>
-
-          <aside className="hidden border-l border-outline-variant bg-surface-container-lowest p-5 lg:block">
-            <h3 className="text-sm font-black uppercase tracking-widest text-on-surface">Try</h3>
-            <div className="mt-4 space-y-3">
-              {(quickStarts[selectedAgent?.id ?? 'cowork'] ?? quickStarts.cowork).map((prompt) => (
-                <div
-                  key={prompt}
-                  className="rounded-xl border border-outline-variant bg-surface-container-low p-3 text-sm leading-6 text-on-surface-variant"
-                >
-                  {prompt}
-                </div>
-              ))}
-            </div>
-
-            <h3 className="mt-8 text-sm font-black uppercase tracking-widest text-on-surface">Powers</h3>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {['Glob', 'Grep', 'Read', 'Write', 'Delete', 'NPM', 'MCP', 'Skills'].map((item) => (
-                <span key={item} className="rounded-full border border-outline-variant bg-surface-container px-2.5 py-1 text-xs font-bold text-on-surface-variant">
-                  {item}
-                </span>
-              ))}
-            </div>
-          </aside>
         </section>
       </main>
     </div>

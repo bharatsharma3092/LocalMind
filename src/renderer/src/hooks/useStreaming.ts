@@ -94,6 +94,21 @@ export function useStreaming() {
 
     // -- onChunk listener
     const chunkCleanup = window.localmind.llm.onChunk(streamId, (chunk: LLMStreamChunk) => {
+      if (chunk.type === 'tool_call' && chunk.toolCall) {
+        const toolName = chunk.toolCall.name || 'tool'
+        updateStreamingMessage(conversationId, assistantMsg.id, `\n\n_Using ${toolName}..._\n`)
+        return
+      }
+
+      if (chunk.type === 'tool_result' && chunk.toolCall) {
+        const toolName = chunk.toolCall.name || 'tool'
+        const resultText = chunk.content && chunk.content !== 'Executing...'
+          ? `_${toolName} finished._\n`
+          : `_${toolName} is running..._\n`
+        updateStreamingMessage(conversationId, assistantMsg.id, `\n${resultText}`)
+        return
+      }
+
       if (chunk.type === 'text' && chunk.content) {
         chunkCount++
         totalCharsReceived += chunk.content.length

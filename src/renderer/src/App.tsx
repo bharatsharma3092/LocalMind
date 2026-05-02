@@ -6,7 +6,6 @@ import { SkillsPage } from './components/skills/SkillsPage'
 import { AgentsPage } from './components/agents/AgentsPage'
 import { ToastContainer } from './components/ui/ToastContainer'
 import { SettingsPage } from './components/settings/SettingsPage'
-import { ConfigurationPage } from './components/settings/ConfigurationPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ArtifactPanel } from './components/artifacts/ArtifactPanel'
 import { McpPermissionDialog } from './components/mcp/McpPermissionDialog'
@@ -20,8 +19,7 @@ function App() {
   const { refreshAllModels, loadCustomProviders } = useProviderStore()
   const { loadPersonas } = usePersonaStore()
   const [currentPage, setCurrentPage] = useState<AppPage>('chat')
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsTab, setSettingsTab] = useState<'general' | 'models' | 'mcp' | 'personas' | 'data'>('general')
+  const [settingsTab, setSettingsTab] = useState<'general' | 'profile' | 'memory' | 'models' | 'mcp' | 'personas' | 'data'>('general')
 
   useEffect(() => {
     loadSettings()
@@ -31,9 +29,9 @@ function App() {
 
   useEffect(() => {
     const handleOpenSettingsTab = (event: Event) => {
-      const customEvent = event as CustomEvent<'general' | 'models' | 'mcp' | 'personas' | 'data'>
+      const customEvent = event as CustomEvent<'general' | 'profile' | 'memory' | 'models' | 'mcp' | 'personas' | 'data'>
       setSettingsTab(customEvent.detail ?? 'general')
-      setSettingsOpen(true)
+      setCurrentPage('settings')
     }
 
     window.addEventListener('localmind:open-settings-tab', handleOpenSettingsTab)
@@ -47,32 +45,29 @@ function App() {
   return (
     <ErrorBoundary>
       <div className="h-screen w-full overflow-hidden flex text-on-background bg-background">
-        {currentPage !== 'settings' && (
-          <Sidebar
-            currentPage={currentPage}
-            onNavigate={handleNavigate}
-            onSettingsClick={() => setSettingsOpen(true)}
-          />
-        )}
-        <div className={`flex-1 flex flex-col h-full overflow-hidden ${currentPage !== 'settings' ? 'md:ml-[260px]' : ''}`}>
+        <Sidebar
+          currentPage={currentPage}
+          onNavigate={handleNavigate}
+          onSettingsClick={() => setCurrentPage('settings')}
+        />
+        <div className="flex-1 flex flex-col h-full overflow-hidden md:ml-[260px]">
           {currentPage === 'chat' && (
             <ChatView onSettingsClick={(tab) => {
               setSettingsTab(tab ?? 'general')
-              setSettingsOpen(true)
+              setCurrentPage('settings')
             }} />
           )}
           {currentPage === 'mcp' && <McpManagementPage />}
           {currentPage === 'skills' && <SkillsPage />}
           {currentPage === 'agents' && <AgentsPage />}
           {currentPage === 'settings' && (
-            <ConfigurationPage onNavigate={handleNavigate} />
+            <SettingsPage initialTab={settingsTab} />
           )}
         </div>
         <ArtifactPanel />
         <ToastContainer />
         <McpPermissionDialog />
         <AgentToolPermissionDialog />
-        {settingsOpen && <SettingsPage initialTab={settingsTab} onClose={() => setSettingsOpen(false)} />}
       </div>
     </ErrorBoundary>
   )

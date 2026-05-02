@@ -1,9 +1,10 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
-import { db } from '../db/connection'
+import { db, persistDatabase } from '../db/connection'
 import { conversations, messages, workspaces, personas, skills as skillsTable, mcpServers } from '../db/schema'
 import { desc } from 'drizzle-orm'
+import { appStore } from '../settings/app-store'
 
 export async function exportAllData(): Promise<string> {
   const exportData: any = {
@@ -15,6 +16,7 @@ export async function exportAllData(): Promise<string> {
     personas: await db.select().from(personas),
     skills: await db.select().from(skillsTable),
     mcpServers: await db.select().from(mcpServers),
+    settings: appStore.store,
   }
 
   const exportDir = join(app.getPath('userData'), 'exports')
@@ -27,9 +29,9 @@ export async function exportAllData(): Promise<string> {
   return filepath
 }
 
-export async function importAllData(zipPath: string): Promise<{ imported: boolean; error?: string }> {
+export async function importAllData(filePath: string): Promise<{ imported: boolean; error?: string }> {
   try {
-    const raw = readFileSync(zipPath, 'utf-8')
+    const raw = readFileSync(filePath, 'utf-8')
     const data = JSON.parse(raw)
 
     if (!data.version) {
@@ -59,6 +61,26 @@ export async function importAllData(zipPath: string): Promise<{ imported: boolea
         try { await db.insert(personas).values(p) } catch {}
       }
     }
+
+    if (data.skills) {
+      for (const skill of data.skills) {
+        try { await db.insert(skillsTable).values(skill) } catch {}
+      }
+    }
+
+    if (data.mcpServers) {
+      for (const server of data.mcpServers) {
+        try { await db.insert(mcpServers).values(server) } catch {}
+      }
+    }
+
+    if (data.settings && typeof data.settings === 'object') {
+      for (const [key, value] of Object.entries(data.settings)) {
+        appStore.set(key as any, value as any)
+      }
+    }
+
+    persistDatabase()
 
     return { imported: true }
   } catch (err: any) {

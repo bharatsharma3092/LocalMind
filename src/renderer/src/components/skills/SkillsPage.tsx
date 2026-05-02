@@ -20,22 +20,37 @@ interface Skill {
 
 // Fallback static skills for development preview when IPC is unavailable
 const fallbackSkills: Skill[] = [
-  { id: 'dev.api-doc-writer', name: 'API Doc Writer', description: 'Generate OpenAPI specs and documentation from code', author: 'LocalMind', version: '1.0.0', icon: 'file-text', category: 'Development', enabled: true },
+  { id: 'dev.api-doc-writer', name: 'API Doc Writer', description: 'Generate OpenAPI specs and documentation from code', author: 'LocalMind', version: '1.0.0', icon: 'description', category: 'Development', enabled: true },
   { id: 'dev.code-reviewer', name: 'Code Reviewer', description: 'Multi-dimensional code review with fixes and suggestions', author: 'LocalMind', version: '1.0.0', icon: 'code', category: 'Development', enabled: true },
-  { id: 'qa.bug-analysis', name: 'Bug Analysis Agent', description: 'Root cause analysis from logs, error messages, and screenshots', author: 'LocalMind', version: '1.0.0', icon: 'bug', category: 'QA & Testing', enabled: true },
+  { id: 'qa.bug-analysis', name: 'Bug Analysis Agent', description: 'Root cause analysis from logs, error messages, and screenshots', author: 'LocalMind', version: '1.0.0', icon: 'bug_report', category: 'QA & Testing', enabled: true },
   { id: 'data.data-cleaner', name: 'Data Cleaner', description: 'Detect and fix messy CSV/JSON data', author: 'LocalMind', version: '1.0.0', icon: 'table', category: 'Data', enabled: true },
   { id: 'productivity.email-drafter', name: 'Email Drafter', description: 'Professional email composition with tone adjustment', author: 'LocalMind', version: '1.0.0', icon: 'mail', category: 'Productivity', enabled: true },
-  { id: 'ops.incident-analyzer', name: 'Incident Analyzer', description: 'Analyze incident logs and suggest fixes', author: 'LocalMind', version: '1.0.0', icon: 'alert-triangle', category: 'Operations', enabled: true },
+  { id: 'ops.incident-analyzer', name: 'Incident Analyzer', description: 'Analyze incident logs and suggest fixes', author: 'LocalMind', version: '1.0.0', icon: 'warning', category: 'Operations', enabled: true },
   { id: 'ai.langgraph-agent', name: 'LangGraph Agent', description: 'Generate LangGraph agent code from description', author: 'LocalMind', version: '1.0.0', icon: 'cpu', category: 'AI', enabled: true },
   { id: 'productivity.meeting-notes', name: 'Meeting Notes', description: 'Structure raw meeting notes into organized summaries', author: 'LocalMind', version: '1.0.0', icon: 'clipboard', category: 'Productivity', enabled: true },
-  { id: 'qa.playwright-writer', name: 'Playwright Writer', description: 'Generate Playwright automation scripts from test scenarios', author: 'LocalMind', version: '1.0.0', icon: 'theater-masks', category: 'QA & Testing', enabled: true },
-  { id: 'dev.pr-summarizer', name: 'PR Summarizer', description: 'Summarize pull request diffs and changes', author: 'LocalMind', version: '1.0.0', icon: 'git-pull-request', category: 'Development', enabled: true },
+  { id: 'qa.playwright-writer', name: 'Playwright Writer', description: 'Generate Playwright automation scripts from test scenarios', author: 'LocalMind', version: '1.0.0', icon: 'theaters', category: 'QA & Testing', enabled: true },
+  { id: 'dev.pr-summarizer', name: 'PR Summarizer', description: 'Summarize pull request diffs and changes', author: 'LocalMind', version: '1.0.0', icon: 'call_merge', category: 'Development', enabled: true },
   { id: 'research.rag-query', name: 'RAG Query', description: 'Q&A over uploaded documents using retrieval-augmented generation', author: 'LocalMind', version: '1.0.0', icon: 'search', category: 'Research', enabled: true },
   { id: 'dev.regex-builder', name: 'Regex Builder', description: 'Generate and test regex patterns from natural language', author: 'LocalMind', version: '1.0.0', icon: 'hash', category: 'Development', enabled: true },
   { id: 'data.sql-builder', name: 'SQL Builder', description: 'Natural language to SQL with schema awareness', author: 'LocalMind', version: '1.0.0', icon: 'database', category: 'Data', enabled: true },
   { id: 'architecture.system-design', name: 'System Design', description: 'High-level system design advisor with diagrams', author: 'LocalMind', version: '1.0.0', icon: 'layout', category: 'Architecture', enabled: true },
   { id: 'qa.test-case-generator', name: 'Test Case Generator', description: 'Generate BDD/TDD test cases from requirements or user stories', author: 'LocalMind', version: '1.0.0', icon: 'test-tube', category: 'QA & Testing', enabled: true },
 ]
+
+const materialIconAliases: Record<string, string> = {
+  'file-text': 'description',
+  bug: 'bug_report',
+  'alert-triangle': 'warning',
+  'theater-masks': 'theaters',
+  'git-pull-request': 'call_merge',
+  layout: 'dashboard',
+  'test-tube': 'science',
+}
+
+function getSkillIcon(icon?: string) {
+  if (!icon) return 'extension'
+  return materialIconAliases[icon] ?? icon
+}
 
 export function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([])
@@ -299,7 +314,7 @@ function SkillCard({
           }`}
         >
           <span className="material-symbols-outlined text-[28px]">
-            {skill.icon || 'extension'}
+            {getSkillIcon(skill.icon)}
           </span>
         </div>
         <span

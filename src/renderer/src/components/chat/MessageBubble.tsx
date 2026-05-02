@@ -63,6 +63,27 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   )
 }
 
+function splitToolActivity(content: string) {
+  const toolLinePattern = /^(?:[*_`>\s]*)?(?:Using\s+(?:local__|tool)|local__[\w_]*\s(?:is\s+)?(?:running|finished)\.?)/i
+  const toolLines: string[] = []
+  const discussionLines: string[] = []
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim()
+    const normalized = trimmed.replace(/^[*_`>\s]+|[*_`\s]+$/g, '')
+    if (toolLinePattern.test(normalized)) {
+      toolLines.push(normalized)
+    } else {
+      discussionLines.push(line)
+    }
+  }
+
+  return {
+    discussion: discussionLines.join('\n').trim(),
+    toolLines,
+  }
+}
+
 export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBranchNavigate }: Props) {
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState(message.content)
@@ -73,6 +94,12 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
 
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
+  const renderedMessage = useMemo(() => {
+    if (!isAssistant) {
+      return { discussion: message.content, toolLines: [] as string[] }
+    }
+    return splitToolActivity(message.content)
+  }, [isAssistant, message.content])
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(message.content)
@@ -130,6 +157,22 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
 
     return (
       <div className="prose prose-sm dark:prose-invert max-w-none">
+        {renderedMessage.toolLines.length > 0 && (
+          <details
+            className="not-prose mb-3 rounded-lg border border-outline-variant/20 bg-surface-container-low/10 px-3 py-1.5 text-[11px] text-on-surface-variant/35"
+          >
+            <summary className="cursor-pointer select-none text-on-surface-variant/40">
+              Tool activity ({renderedMessage.toolLines.length})
+            </summary>
+            <div className="mt-2 space-y-1 font-mono italic opacity-70">
+              {renderedMessage.toolLines.map((line, index) => (
+                <div key={`${line}-${index}`} className="truncate">
+                  {line}
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
@@ -147,7 +190,7 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
             },
           }}
         >
-          {message.content || (message.isStreaming ? '...' : '')}
+          {renderedMessage.discussion || (message.isStreaming ? 'Working...' : '')}
         </ReactMarkdown>
         {message.isStreaming && (
           <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1 rounded-sm" />

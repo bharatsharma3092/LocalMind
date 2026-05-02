@@ -17,6 +17,19 @@ export interface AppSettings {
   checkUpdates: boolean
   defaultModel: string | null
   contextLength: number
+  userProfile?: {
+    displayName: string
+    email: string
+    authProvider: 'local' | 'google' | 'github' | 'microsoft' | null
+  }
+  memoryEnabled?: boolean
+  memories?: {
+    id: string
+    content: string
+    source: string
+    enabled: boolean
+    createdAt: number
+  }[]
 }
 
 const defaults: AppSettings = {
@@ -36,6 +49,13 @@ const defaults: AppSettings = {
   checkUpdates: true,
   defaultModel: null,
   contextLength: 8192,
+  userProfile: {
+    displayName: '',
+    email: '',
+    authProvider: null,
+  },
+  memoryEnabled: true,
+  memories: [],
 }
 
 export const appStore = new ElectronStore<AppSettings>({ defaults })

@@ -48,7 +48,7 @@ const marketplaceItems: MarketplaceItem[] = [
     category: 'Official',
     packageName: '@modelcontextprotocol/server-filesystem',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/allowed/dir'],
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '{{path}}'],
     transport: 'stdio',
     requiresConfig: true,
     configFields: [{ key: 'path', label: 'Allowed Directory', placeholder: '/Users/username/Documents', envVar: 'MCP_FS_PATH' }],
@@ -93,7 +93,7 @@ const marketplaceItems: MarketplaceItem[] = [
     category: 'Official',
     packageName: '@modelcontextprotocol/server-sqlite',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-sqlite', '/path/to/database.db'],
+    args: ['-y', '@modelcontextprotocol/server-sqlite', '{{dbPath}}'],
     transport: 'stdio',
     requiresConfig: true,
     configFields: [{ key: 'dbPath', label: 'Database Path', placeholder: '/path/to/database.db' }],
@@ -254,6 +254,11 @@ const statusConfig = {
   disconnected: { dot: 'bg-error', shadow: 'shadow-[0_0_8px_rgba(255,180,171,0.5)]', text: 'text-error', label: 'Disconnected' },
 }
 
+function processCommand(command?: string) {
+  if (command === 'npx' && navigator.userAgent.includes('Windows')) return 'npx.cmd'
+  return command
+}
+
 export function McpManagementPage() {
   const [servers, setServers] = useState<ServerStatus[]>([])
   const [showAddForm, setShowAddForm] = useState(false)
@@ -270,6 +275,7 @@ export function McpManagementPage() {
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set())
   const [installingItem, setInstallingItem] = useState<MarketplaceItem | null>(null)
   const [installConfig, setInstallConfig] = useState<Record<string, string>>({})
+  const installConfigComplete = !installingItem?.configFields?.some((field) => !installConfig[field.key]?.trim())
 
   const refreshStatus = useCallback(async () => {
     const res = await window.localmind.mcp.serverStatus()
@@ -334,9 +340,10 @@ export function McpManagementPage() {
     } else {
       // Direct install without config
       const config: ServerConfig = {
+        id: item.id,
         name: item.name,
         transport: item.transport,
-        command: item.command,
+        command: processCommand(item.command),
         args: item.args,
         url: item.url,
       }
@@ -363,9 +370,10 @@ export function McpManagementPage() {
     })
 
     const config: ServerConfig = {
+      id: item.id,
       name: item.name,
       transport: item.transport,
-      command: item.command,
+      command: processCommand(item.command),
       args,
       url: item.url,
       env: Object.keys(env).length > 0 ? env : undefined,
@@ -533,7 +541,8 @@ export function McpManagementPage() {
                   </button>
                   <button
                     onClick={handleInstallWithConfig}
-                    className="px-5 py-2 bg-primary-container text-white rounded-lg text-sm font-semibold hover:bg-accent-hover transition-colors"
+                    disabled={!installConfigComplete}
+                    className="px-5 py-2 bg-primary-container text-white rounded-lg text-sm font-semibold hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Install & Connect
                   </button>

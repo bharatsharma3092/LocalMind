@@ -54,6 +54,7 @@ export interface LLMRequest {
   provider: ProviderType
   customProviderId?: string
   agentId?: string
+  workspacePath?: string
   personaId?: string
   personaVariables?: Record<string, string>
   tools?: ToolDefinition[]
@@ -86,6 +87,7 @@ export interface LLMApi {
   startStream: (req: LLMRequest) => Promise<IPCResponse<{ streamId: string }>>
   cancelStream: (streamId: string) => Promise<void>
   listModels: (provider: string) => Promise<IPCResponse<ModelInfo[]>>
+  fetchCustomModels: (data: { baseUrl: string; apiKey?: string }) => Promise<IPCResponse<{ id: string; name: string }[]>>
   estimateCost: (req: LLMRequest) => Promise<IPCResponse<TokenUsage>>
   onChunk: (streamId: string, cb: (chunk: LLMStreamChunk) => void) => () => void
   onDone: (streamId: string, cb: (usage: TokenUsage) => void) => () => void
@@ -213,6 +215,7 @@ export interface DataApi {
 
 export interface FileApi {
   getPathForFile: (file: File) => string | null
+  selectFolder: () => Promise<IPCResponse<string | null>>
   upload: (fileData: any) => Promise<IPCResponse<any>>
   read: (filePath: string) => Promise<IPCResponse<string>>
   uploadFolder: (dirPath: string, extensions?: string[]) => Promise<IPCResponse<any[]>>

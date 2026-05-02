@@ -16,11 +16,27 @@ interface Props {
 }
 
 const fallbackSkills: Skill[] = [
-  { id: 'dev.api-doc-writer', name: 'API Doc Writer', description: 'Generate OpenAPI specs and documentation from code', icon: 'file_text', category: 'Development', enabled: true },
+  { id: 'dev.api-doc-writer', name: 'API Doc Writer', description: 'Generate OpenAPI specs and documentation from code', icon: 'description', category: 'Development', enabled: true },
   { id: 'dev.code-reviewer', name: 'Code Reviewer', description: 'Review code for bugs, maintainability, and missing tests', icon: 'code', category: 'Development', enabled: true },
   { id: 'qa.bug-analysis', name: 'Bug Analysis Agent', description: 'Find likely root causes from logs, errors, and screenshots', icon: 'bug_report', category: 'QA', enabled: true },
   { id: 'data.sql-builder', name: 'SQL Builder', description: 'Create SQL queries from natural language and schema context', icon: 'database', category: 'Data', enabled: true },
 ]
+
+const materialIconAliases: Record<string, string> = {
+  'file-text': 'description',
+  file_text: 'description',
+  bug: 'bug_report',
+  'alert-triangle': 'warning',
+  'theater-masks': 'theaters',
+  'git-pull-request': 'call_merge',
+  layout: 'dashboard',
+  'test-tube': 'science',
+}
+
+function getSkillIcon(icon?: string) {
+  if (!icon) return 'bolt'
+  return materialIconAliases[icon] ?? icon
+}
 
 export function SkillLauncher({ onSelect, onClose }: Props) {
   const [skills, setSkills] = useState<Skill[]>([])
@@ -126,7 +142,7 @@ export function SkillLauncher({ onSelect, onClose }: Props) {
               >
                 <span className="text-lg w-8 text-center">
                   <span className="material-symbols-outlined text-[20px]">
-                    {skill.icon ?? 'bolt'}
+                    {getSkillIcon(skill.icon)}
                   </span>
                 </span>
                 <div className="min-w-0">

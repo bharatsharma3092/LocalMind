@@ -1,4 +1,5 @@
 import { mcpHostManager } from '../mcp/host-manager'
+import { extractFileContent } from '../files/extractor'
 import type { ToolDefinition, ToolCall } from '@shared/types/localmind-api'
 import { execFile } from 'child_process'
 import { promises as fs } from 'fs'
@@ -19,12 +20,13 @@ const log = {
 }
 
 const execFileAsync = promisify(execFile)
-const workspaceRoot = resolve(process.cwd())
+const defaultWorkspaceRoot = resolve(process.cwd())
 const ignoredDirs = new Set(['.git', 'node_modules', 'out', 'dist', 'build', '.playwright-cli'])
 const textExtensions = new Set([
   '.c', '.cpp', '.cs', '.css', '.csv', '.env', '.html', '.js', '.json', '.jsx', '.md',
   '.mjs', '.py', '.rs', '.sql', '.ts', '.tsx', '.txt', '.yaml', '.yml',
 ])
+const extractableExtensions = new Set(['.pdf', '.docx', '.pptx', '.xlsx'])
 
 function stripUnsupportedSchemaFields(obj: any): any {
   if (obj === null || typeof obj !== 'object') return obj
@@ -37,7 +39,12 @@ function stripUnsupportedSchemaFields(obj: any): any {
   return cleaned
 }
 
-function resolveWorkspacePath(inputPath = '.'): string {
+function getWorkspaceRoot(workspacePath?: string): string {
+  return resolve(workspacePath || defaultWorkspaceRoot)
+}
+
+function resolveWorkspacePath(inputPath = '.', workspacePath?: string): string {
+  const workspaceRoot = getWorkspaceRoot(workspacePath)
   const resolved = resolve(workspaceRoot, inputPath)
   const rel = relative(workspaceRoot, resolved)
   if (rel.startsWith('..') || resolve(rel) === resolved) {
@@ -46,7 +53,8 @@ function resolveWorkspacePath(inputPath = '.'): string {
   return resolved
 }
 
-function toWorkspacePath(absPath: string): string {
+function toWorkspacePath(absPath: string, workspacePath?: string): string {
+  const workspaceRoot = getWorkspaceRoot(workspacePath)
   const rel = relative(workspaceRoot, absPath)
   return rel === '' ? '.' : rel.replace(/\\/g, '/')
 }
@@ -58,7 +66,7 @@ function wildcardToRegExp(pattern: string): RegExp {
   return new RegExp(`^${regex}$`, 'i')
 }
 
-async function walkFiles(root: string, maxFiles: number): Promise<string[]> {
+async function walkFiles(root: string, maxFiles: number, workspacePath?: string): Promise<string[]> {
   const results: string[] = []
 
   async function visit(dir: string): Promise<void> {
@@ -71,7 +79,7 @@ async function walkFiles(root: string, maxFiles: number): Promise<string[]> {
       if (entry.isDirectory()) {
         if (!ignoredDirs.has(entry.name)) await visit(fullPath)
       } else if (entry.isFile()) {
-        results.push(toWorkspacePath(fullPath))
+        results.push(toWorkspacePath(fullPath, workspacePath))
       }
     }
   }
@@ -115,7 +123,7 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'local__read_file',
-        description: 'Read a text file from the current workspace.',
+        description: 'Read a file from the current workspace. Supports text, PDF, DOCX, PPTX, and XLSX extraction.',
         parameters: {
           type: 'object',
           required: ['path'],
@@ -170,6 +178,23 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
           properties: {
             path: { type: 'string', description: 'Workspace-relative file path.' },
             content: { type: 'string', description: 'Complete file content to write.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__edit_file',
+        description: 'Edit a text file by replacing an exact string. Prefer this for targeted code changes.',
+        parameters: {
+          type: 'object',
+          required: ['path', 'oldText', 'newText'],
+          properties: {
+            path: { type: 'string', description: 'Workspace-relative file path.' },
+            oldText: { type: 'string', description: 'Exact text to replace.' },
+            newText: { type: 'string', description: 'Replacement text.' },
+            replaceAll: { type: 'boolean', description: 'Replace every occurrence. Defaults to false.' },
           },
         },
       },
@@ -303,6 +328,7 @@ export function isLocalToolName(name: string): boolean {
 
 export async function executeLocalToolCall(
   toolCall: ToolCall,
+  workspacePath?: string,
   approvalHandler?: (toolName: string, args: Record<string, any>) => Promise<boolean>
 ): Promise<{ role: 'tool'; content: string; toolCallId: string }> {
   let args: Record<string, any> = {}
@@ -314,22 +340,42 @@ export async function executeLocalToolCall(
 
   try {
     if (toolCall.name === 'local__list_files') {
-      const root = resolveWorkspacePath(args.path ?? '.')
-      const files = await walkFiles(root, Math.min(Number(args.maxFiles) || 100, 500))
+      const workspaceRoot = getWorkspaceRoot(workspacePath)
+      const root = resolveWorkspacePath(args.path ?? '.', workspacePath)
+      const files = await walkFiles(root, Math.min(Number(args.maxFiles) || 100, 500), workspacePath)
       return { role: 'tool', content: JSON.stringify({ workspaceRoot, files }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__glob') {
+      const workspaceRoot = getWorkspaceRoot(workspacePath)
       const pattern = String(args.pattern ?? '')
       if (!pattern) throw new Error('pattern is required')
       const regex = wildcardToRegExp(pattern)
-      const files = await walkFiles(workspaceRoot, Math.min(Number(args.maxFiles) || 100, 500))
+      const files = await walkFiles(workspaceRoot, Math.min(Number(args.maxFiles) || 100, 500), workspacePath)
       return { role: 'tool', content: JSON.stringify({ files: files.filter((file) => regex.test(file)) }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__read_file') {
-      const filePath = resolveWorkspacePath(String(args.path ?? ''))
+      const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
       const extension = extname(filePath).toLowerCase()
+      if (extractableExtensions.has(extension)) {
+        const extracted = await extractFileContent(filePath)
+        const lines = extracted.text.split(/\r?\n/)
+        const startLine = Math.max(Number(args.startLine) || 1, 1)
+        const maxLines = Math.min(Number(args.maxLines) || 200, 1000)
+        const selected = lines.slice(startLine - 1, startLine - 1 + maxLines)
+        return {
+          role: 'tool',
+          content: JSON.stringify({
+            path: toWorkspacePath(filePath, workspacePath),
+            extractedFrom: extension,
+            startLine,
+            endLine: startLine + selected.length - 1,
+            content: selected.join('\n'),
+          }),
+          toolCallId: toolCall.id,
+        }
+      }
       if (extension && !textExtensions.has(extension)) {
         throw new Error(`Refusing to read likely binary file: ${args.path}`)
       }
@@ -341,7 +387,7 @@ export async function executeLocalToolCall(
       return {
         role: 'tool',
         content: JSON.stringify({
-          path: toWorkspacePath(filePath),
+          path: toWorkspacePath(filePath, workspacePath),
           startLine,
           endLine: startLine + selected.length - 1,
           content: selected.join('\n'),
@@ -351,15 +397,15 @@ export async function executeLocalToolCall(
     }
 
     if (toolCall.name === 'local__search_files' || toolCall.name === 'local__grep') {
-      const root = resolveWorkspacePath(args.path ?? '.')
+      const root = resolveWorkspacePath(args.path ?? '.', workspacePath)
       const query = String(args.query ?? '').toLowerCase()
       if (!query) throw new Error('query is required')
-      const files = await walkFiles(root, 1000)
+      const files = await walkFiles(root, 1000, workspacePath)
       const maxResults = Math.min(Number(args.maxResults) || 50, 200)
       const matches: Array<{ path: string; line: number; text: string }> = []
       for (const relPath of files) {
         if (matches.length >= maxResults) break
-        const filePath = resolveWorkspacePath(relPath)
+        const filePath = resolveWorkspacePath(relPath, workspacePath)
         const extension = extname(filePath).toLowerCase()
         if (extension && !textExtensions.has(extension)) continue
         let text = ''
@@ -375,10 +421,29 @@ export async function executeLocalToolCall(
     }
 
     if (toolCall.name === 'local__write_file') {
-      const filePath = resolveWorkspacePath(String(args.path ?? ''))
+      const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
       await fs.mkdir(dirname(filePath), { recursive: true })
       await fs.writeFile(filePath, String(args.content ?? ''), 'utf-8')
-      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath), bytes: Buffer.byteLength(String(args.content ?? ''), 'utf-8') }), toolCallId: toolCall.id }
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), bytes: Buffer.byteLength(String(args.content ?? ''), 'utf-8') }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__edit_file') {
+      const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
+      const oldText = String(args.oldText ?? '')
+      const newText = String(args.newText ?? '')
+      if (!oldText) throw new Error('oldText is required')
+      const current = await fs.readFile(filePath, 'utf-8')
+      if (!current.includes(oldText)) throw new Error(`oldText was not found in ${args.path}`)
+      const next = args.replaceAll ? current.split(oldText).join(newText) : current.replace(oldText, newText)
+      await fs.writeFile(filePath, next, 'utf-8')
+      return {
+        role: 'tool',
+        content: JSON.stringify({
+          path: toWorkspacePath(filePath, workspacePath),
+          replacements: args.replaceAll ? current.split(oldText).length - 1 : 1,
+        }),
+        toolCallId: toolCall.id,
+      }
     }
 
     if (toolCall.name === 'local__delete_path') {
@@ -390,15 +455,16 @@ export async function executeLocalToolCall(
         }
       }
 
-      const targetPath = resolveWorkspacePath(String(args.path ?? ''))
-      if (toWorkspacePath(targetPath) === '.') throw new Error('Refusing to delete the workspace root')
+      const targetPath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
+      if (toWorkspacePath(targetPath, workspacePath) === '.') throw new Error('Refusing to delete the workspace root')
       const stats = await fs.stat(targetPath)
       await fs.rm(targetPath, { recursive: Boolean(args.recursive) && stats.isDirectory(), force: false })
-      return { role: 'tool', content: JSON.stringify({ deleted: toWorkspacePath(targetPath) }), toolCallId: toolCall.id }
+      return { role: 'tool', content: JSON.stringify({ deleted: toWorkspacePath(targetPath, workspacePath) }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__run_npm_script') {
-      const packageJsonPath = resolveWorkspacePath('package.json')
+      const workspaceRoot = getWorkspaceRoot(workspacePath)
+      const packageJsonPath = resolveWorkspacePath('package.json', workspacePath)
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'))
       const script = String(args.script ?? '')
       if (!packageJson.scripts?.[script]) throw new Error(`npm script not found: ${script}`)

@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('localmind', {
     startStream: (req: any) => ipcRenderer.invoke('llm:startStream', req),
     cancelStream: (streamId: string) => ipcRenderer.invoke('llm:cancelStream', streamId),
     listModels: (provider: string) => ipcRenderer.invoke('llm:listModels', provider),
+    fetchCustomModels: (data: { baseUrl: string; apiKey?: string }) => ipcRenderer.invoke('llm:fetchCustomModels', data),
     estimateCost: (req: any) => ipcRenderer.invoke('llm:estimateCost', req),
     signalReady: (streamId: string) => ipcRenderer.send(`llm:ready:${streamId}`, streamId),
 
@@ -152,6 +153,7 @@ contextBridge.exposeInMainWorld('localmind', {
 
   file: {
     getPathForFile: (file: File) => webUtils.getPathForFile(file),
+    selectFolder: () => ipcRenderer.invoke('file:selectFolder'),
     upload: (fileData: any) => ipcRenderer.invoke('file:upload', fileData),
     read: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
     uploadFolder: (dirPath: string, extensions?: string[]) => ipcRenderer.invoke('file:uploadFolder', dirPath, extensions),

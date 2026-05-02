@@ -27,10 +27,11 @@ interface Props {
   disabled?: boolean
   isLanding?: boolean
   forcedAgent?: Agent | null
+  workspacePath?: string | null
   compactTools?: boolean
 }
 
-export function ChatInput({ conversationId, disabled = false, isLanding = false, forcedAgent = null, compactTools = false }: Props) {
+export function ChatInput({ conversationId, disabled = false, isLanding = false, forcedAgent = null, workspacePath = null, compactTools = false }: Props) {
   const [input, setInput] = useState('')
   const [showSkillLauncher, setShowSkillLauncher] = useState(false)
   const [attachedContexts, setAttachedContexts] = useState<AttachedContext[]>([])
@@ -272,6 +273,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
       provider: (selectedModel?.provider as any) ?? 'ollama',
       customProviderId: selectedModel?.customProviderId,
       agentId: forcedAgent?.id,
+      workspacePath: workspacePath ?? undefined,
       personaId: personaIdForRequest ?? undefined,
       personaVariables: {
         model: selectedModel?.name ?? selectedModel?.id ?? 'qwen2.5:7b',
@@ -281,7 +283,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     }
 
     await startStream(currentConvId, request)
-  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId, forcedAgent])
+  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId, forcedAgent, workspacePath])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -396,7 +398,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder={isInert ? (isLanding ? 'What can I help you with?' : 'Start a conversation first...') : 'Message LocalMind... Use @ to trigger skills, / for commands'}
+            placeholder={isInert ? (isLanding ? 'What can I help you with?' : 'Start a conversation first...') : 'Message LocalMind... Use / to trigger skills and, @ for commands'}
             rows={1}
             className="w-full bg-transparent border-none text-on-surface placeholder:text-on-surface-variant/50 resize-none focus:ring-0 text-[16px] leading-relaxed px-3 py-2 min-h-[36px] max-h-[200px] overflow-y-auto"
             disabled={isInert || isCreatingConv}

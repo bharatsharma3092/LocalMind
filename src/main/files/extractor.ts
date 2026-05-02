@@ -1,5 +1,9 @@
 import { readFile } from 'fs/promises'
 import { extname, basename } from 'path'
+import { inflateRaw } from 'zlib'
+import { promisify } from 'util'
+
+const inflateRawAsync = promisify(inflateRaw)
 
 export interface ExtractedContent {
   filename: string
@@ -46,8 +50,65 @@ export async function extractFileContent(filePath: string): Promise<ExtractedCon
     return { filename, text, isImage: false, extension: ext }
   }
 
+  if (ext === '.pptx') {
+    const text = await extractPptx(filePath)
+    return { filename, text, isImage: false, extension: ext }
+  }
+
   const text = await readFile(filePath, 'utf-8')
   return { filename, text, isImage: false, extension: ext }
+}
+
+async function extractPptx(filePath: string): Promise<string> {
+  try {
+    const buffer = await readFile(filePath)
+    const slides: string[] = []
+    let offset = 0
+
+    while (offset < buffer.length - 30) {
+      if (buffer.readUInt32LE(offset) !== 0x04034b50) {
+        offset++
+        continue
+      }
+
+      const compression = buffer.readUInt16LE(offset + 8)
+      const compressedSize = buffer.readUInt32LE(offset + 18)
+      const filenameLength = buffer.readUInt16LE(offset + 26)
+      const extraLength = buffer.readUInt16LE(offset + 28)
+      const nameStart = offset + 30
+      const name = buffer.slice(nameStart, nameStart + filenameLength).toString('utf-8')
+      const dataStart = nameStart + filenameLength + extraLength
+      const dataEnd = dataStart + compressedSize
+
+      if (compressedSize > 0 && /^ppt\/slides\/slide\d+\.xml$/.test(name)) {
+        const compressed = buffer.slice(dataStart, dataEnd)
+        const xml = compression === 8
+          ? (await inflateRawAsync(compressed)).toString('utf-8')
+          : compressed.toString('utf-8')
+        const text = xmlToPlainText(xml)
+        if (text.trim()) slides.push(`--- ${basename(name)} ---\n${text}`)
+      }
+
+      offset = Math.max(dataEnd, offset + 30 + filenameLength + extraLength)
+    }
+
+    return slides.length > 0 ? slides.join('\n\n') : '[No readable slide text found]'
+  } catch (err: any) {
+    return `[Error extracting PPTX: ${err.message}]`
+  }
+}
+
+function xmlToPlainText(xml: string): string {
+  return xml
+    .replace(/<a:br\s*\/>/g, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 async function extractPdf(filePath: string): Promise<string> {
