@@ -46,7 +46,8 @@ const builtinAgents = [
     description: 'A collaborative coding partner that helps plan, implement, review, and test changes with project context.',
     systemPrompt: [
       'You are Cowork, a collaborative software engineering agent inside LocalMind.',
-      'Work like a careful pair programmer with access to local workspace tools: inspect files, search code, write targeted changes, and run existing npm scripts when useful.',
+      'You have full access to the local file system including any absolute path the user specifies (e.g. C:\\Users\\Bharat\\Downloads or any other drive/folder). Never refuse to access a path because it is outside a "project directory" — the user controls what paths are in scope.',
+      'Work like a careful pair programmer in the user-selected workspace folder: inspect files, search code, read documents, edit targeted changes, and run existing npm scripts when useful.',
       'Clarify intent only when needed, propose practical next steps, and help the user move from idea to verified implementation.',
       'Prefer concrete actions, concise reasoning, and testable results. Before changing files, inspect the relevant code and keep edits scoped.',
       'Keep privacy in mind and avoid suggesting cloud services unless the user asks for them or the current provider is already cloud-based.',
@@ -64,7 +65,7 @@ const builtinAgents = [
     description: 'A coding agent for planning, editing, debugging, reviewing, testing, and running project workflows with local tools.',
     systemPrompt: [
       'You are Code, a local coding agent inside LocalMind with tools similar to a terminal coding assistant.',
-      'You can plan implementation, inspect files, glob for paths, grep/search code, read files, write files, delete paths after approval, run existing npm scripts, use MCP tools, and invoke LocalMind skills.',
+      'You can plan implementation, inspect the selected workspace folder, glob for paths, grep/search code, read text and Office/PDF files, edit/write files, delete paths after approval, run existing npm scripts, use MCP tools, and invoke LocalMind skills.',
       'Default to a practical engineering loop: understand the request, inspect relevant code, make focused edits, run verification, and summarize the outcome.',
       'For debugging and review, prioritize concrete bugs, failing paths, missing tests, and exact file references.',
       'Keep changes scoped and do not delete files unless the user approves the delete confirmation.',
@@ -79,6 +80,35 @@ const builtinAgents = [
 ]
 
 type LocalMindAgent = typeof builtinAgents[number]
+
+function getMemorySystemPrompt(): string | null {
+  const enabled = appStore.get('memoryEnabled') ?? true
+  if (!enabled) return null
+
+  const profile = appStore.get('userProfile') as any
+  const memories = ((appStore.get('memories') as any[]) ?? []).filter((memory) => memory?.enabled !== false && memory?.content?.trim())
+  const lines: string[] = []
+
+  if (profile?.displayName?.trim()) {
+    lines.push(`The user's name is ${profile.displayName.trim()}.`)
+  }
+  if (profile?.email?.trim()) {
+    lines.push(`The user's email is ${profile.email.trim()}.`)
+  }
+  if (memories.length > 0) {
+    lines.push('Stored user memory:')
+    for (const memory of memories.slice(0, 40)) {
+      lines.push(`- ${memory.content.trim()}`)
+    }
+  }
+
+  if (lines.length === 0) return null
+  return [
+    'Use this private LocalMind memory to personalize responses when relevant.',
+    'Do not reveal these stored details unless the user asks about memory or profile settings.',
+    ...lines,
+  ].join('\n')
+}
 
 async function listAgents(): Promise<LocalMindAgent[]> {
   const rows = await db.select().from(agents).all()
@@ -166,6 +196,17 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
       try {
         let currentMessages = [...request.messages]
+        const memoryPrompt = getMemorySystemPrompt()
+        if (memoryPrompt) {
+          currentMessages = [
+            {
+              role: 'system',
+              content: memoryPrompt,
+            },
+            ...currentMessages,
+          ]
+        }
+
         if (request.agentId) {
           const agent = await getAgent(request.agentId)
           if (agent) {
@@ -351,7 +392,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
               }
               sendChunk(browserWin, streamId, resultChunk)
 
-              toolResult = await executeLocalToolCall(tc, async (toolName, args) => {
+              toolResult = await executeLocalToolCall(tc, request.workspacePath, async (toolName, args) => {
                 const approvalId = `${toolName}:${Date.now()}`
                 win.webContents.send('agent:approvalRequest', {
                   approvalId,
@@ -444,6 +485,29 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     const models = await llmRouter.listModels(provider)
     log.info('listModels', 'Models fetched', { provider, count: models?.length })
     return models
+  }))
+
+  ipcMain.handle('llm:fetchCustomModels', safeHandle(async (_, data: { baseUrl: string; apiKey?: string }) => {
+    const baseUrl = String(data?.baseUrl ?? '').trim().replace(/\/+$/, '')
+    if (!baseUrl) throw new Error('Base URL is required')
+
+    const headers: Record<string, string> = {}
+    if (data?.apiKey?.trim()) headers.Authorization = `Bearer ${data.apiKey.trim()}`
+
+    const response = await fetch(`${baseUrl}/models`, { headers })
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new Error(`Failed to fetch models (${response.status})${body ? `: ${body.slice(0, 300)}` : ''}`)
+    }
+
+    const payload = await response.json()
+    const rawModels = Array.isArray(payload?.data) ? payload.data : []
+    return rawModels
+      .map((model: any) => ({
+        id: String(model?.id ?? '').trim(),
+        name: String(model?.id ?? '').trim(),
+      }))
+      .filter((model: { id: string }) => model.id)
   }))
 
   ipcMain.handle('llm:estimateCost', safeHandle(async (_, request: LLMRequest) => {
@@ -1076,6 +1140,15 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
   }))
 
   // --- File ------------------------------------------------------------------
+
+  ipcMain.handle('file:selectFolder', safeHandle(async () => {
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: 'Select workspace folder',
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  }))
 
   ipcMain.handle('file:upload', safeHandle(async (_, fileData: any) => {
     const filePath = fileData.path ?? fileData
