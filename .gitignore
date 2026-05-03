@@ -17,6 +17,8 @@ _run_ast.py
 # Other temp/generated files
 .claude/
 .playwright-mcp/
+.playwright-cli/
 electron.vite.config.*.mjs
 opencode.json
+output/
 tsconfig.renderer.tsbuildinfo
