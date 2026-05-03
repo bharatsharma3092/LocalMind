@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('localmind', {
     cancelStream: (streamId: string) => ipcRenderer.invoke('llm:cancelStream', streamId),
     listModels: (provider: string) => ipcRenderer.invoke('llm:listModels', provider),
     fetchCustomModels: (data: { baseUrl: string; apiKey?: string }) => ipcRenderer.invoke('llm:fetchCustomModels', data),
+    refinePrompt: (req: any) => ipcRenderer.invoke('llm:refinePrompt', req),
     estimateCost: (req: any) => ipcRenderer.invoke('llm:estimateCost', req),
     signalReady: (streamId: string) => ipcRenderer.send(`llm:ready:${streamId}`, streamId),
 
@@ -169,6 +170,14 @@ contextBridge.exposeInMainWorld('localmind', {
     setProvider: (provider: string) => ipcRenderer.invoke('websearch:setProvider', provider),
     getEnabled: () => ipcRenderer.invoke('websearch:getEnabled'),
     setEnabled: (enabled: boolean) => ipcRenderer.invoke('websearch:setEnabled', enabled),
+  },
+
+  claudeProxy: {
+    getSettings: () => ipcRenderer.invoke('claudeProxy:getSettings'),
+    saveSettings: (settings: any) => ipcRenderer.invoke('claudeProxy:saveSettings', settings),
+    start: () => ipcRenderer.invoke('claudeProxy:start'),
+    stop: () => ipcRenderer.invoke('claudeProxy:stop'),
+    status: () => ipcRenderer.invoke('claudeProxy:status'),
   },
 
   system: {

@@ -12,6 +12,7 @@ interface Skill {
 
 interface Props {
   onSelect: (skill: Skill) => void
+  onCreateSkill?: () => void
   onClose: () => void
 }
 
@@ -38,7 +39,7 @@ function getSkillIcon(icon?: string) {
   return materialIconAliases[icon] ?? icon
 }
 
-export function SkillLauncher({ onSelect, onClose }: Props) {
+export function SkillLauncher({ onSelect, onCreateSkill, onClose }: Props) {
   const [skills, setSkills] = useState<Skill[]>([])
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -124,6 +125,23 @@ export function SkillLauncher({ onSelect, onClose }: Props) {
         </div>
 
         <div className="max-h-[360px] overflow-y-auto py-1">
+          {onCreateSkill && (
+            <button
+              onClick={onCreateSkill}
+              className="grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 border-b border-outline-variant px-4 py-3 text-left text-on-surface hover:bg-surface-container"
+            >
+              <span className="text-lg w-8 text-center">
+                <span className="material-symbols-outlined text-[20px]">add_circle</span>
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold leading-5 text-on-surface">Create Skill</p>
+                <p className="mt-0.5 text-xs leading-4 text-on-surface-variant">Save a reusable instruction and make it available here.</p>
+              </div>
+              <span className="rounded-full border border-primary-container/40 bg-primary-container/10 px-2 py-0.5 text-xs text-primary">
+                New
+              </span>
+            </button>
+          )}
           {filtered.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-on-surface-variant">
               No skills found

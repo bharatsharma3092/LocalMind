@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, shell } from 'electron'
+import { app, BrowserWindow, globalShortcut, shell, session } from 'electron'
 import { join } from 'path'
 import { appStore } from './settings/app-store'
 import { initDatabase, runMigrations, closeDatabase } from './db/connection'
@@ -27,6 +27,9 @@ if (!gotTheLock) {
       console.error('DB init failed:', err)
     }
     createWindow()
+    session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+      callback(permission === 'media' || permission === 'audioCapture')
+    })
     registerGlobalShortcut()
   })
 }

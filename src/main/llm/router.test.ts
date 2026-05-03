@@ -75,7 +75,7 @@ describe('LLMRouter', () => {
     vi.doMock('./providers/openai', () => ({ OpenAIProvider: class {} }))
     vi.doMock('./providers/openrouter', () => ({ OpenRouterProvider: class {} }))
     vi.doMock('./providers/google', () => ({ GoogleProvider: class {} }))
-    vi.doMock('./providers/custom', () => ({ CustomProvider: class {} }))
+    vi.doMock('./providers/custom', () => ({ CustomProvider: class {}, getCustomProvidersFromSettings: () => [] }))
 
     const { LLMRouter: Router } = await import('./router')
     const router = new Router()
@@ -94,7 +94,7 @@ describe('LLMRouter', () => {
     expect(chunks.length).toBeGreaterThan(0)
   })
 
-  it('throws for unknown provider', async () => {
+  it('falls back to the default custom provider for unknown providers', async () => {
     vi.doMock('../settings/app-store', () => ({
       appStore: { get: () => false },
     }))
@@ -102,7 +102,14 @@ describe('LLMRouter', () => {
     vi.doMock('./providers/openai', () => ({ OpenAIProvider: class {} }))
     vi.doMock('./providers/openrouter', () => ({ OpenRouterProvider: class {} }))
     vi.doMock('./providers/google', () => ({ GoogleProvider: class {} }))
-    vi.doMock('./providers/custom', () => ({ CustomProvider: class {} }))
+    vi.doMock('./providers/custom', () => ({
+      CustomProvider: class {
+        async *complete() {
+          yield { type: 'text', content: 'custom fallback' }
+        }
+      },
+      getCustomProvidersFromSettings: () => [],
+    }))
 
     const { LLMRouter: Router } = await import('./router')
     const router = new Router()
@@ -114,9 +121,11 @@ describe('LLMRouter', () => {
       stream: true,
     }
 
-    await expect(async () => {
-      for await (const _ of router.complete(request)) {}
-    }).rejects.toThrow('is not configured')
+    const chunks: any[] = []
+    for await (const chunk of router.complete(request)) {
+      chunks.push(chunk)
+    }
+    expect(chunks[0]?.content).toBe('custom fallback')
   })
 
   it('delegates listModels to correct provider', async () => {
@@ -133,7 +142,7 @@ describe('LLMRouter', () => {
     vi.doMock('./providers/openai', () => ({ OpenAIProvider: class {} }))
     vi.doMock('./providers/openrouter', () => ({ OpenRouterProvider: class {} }))
     vi.doMock('./providers/google', () => ({ GoogleProvider: class {} }))
-    vi.doMock('./providers/custom', () => ({ CustomProvider: class {} }))
+    vi.doMock('./providers/custom', () => ({ CustomProvider: class {}, getCustomProvidersFromSettings: () => [] }))
 
     const { LLMRouter: Router } = await import('./router')
     const router = new Router()

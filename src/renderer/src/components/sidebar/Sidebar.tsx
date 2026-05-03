@@ -46,12 +46,15 @@ export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
     <nav className="fixed left-0 top-0 h-full w-[260px] border-r border-outline-variant bg-surface-container-lowest flex flex-col py-4 z-40 hidden md:flex">
       {/* Header */}
       <div className="px-6 mb-8 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-primary-container/20 flex items-center justify-center text-primary-container">
+        <div className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-primary-container/30 bg-surface-container text-primary shadow-sm">
           <span
-            className="material-symbols-outlined font-black text-[20px]"
+            className="material-symbols-outlined font-black text-[22px]"
             style={{ fontVariationSettings: "'FILL' 1" }}
           >
-            psychology
+            memory
+          </span>
+          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary-container text-[10px] text-white">
+            <span className="material-symbols-outlined text-[12px]">lock</span>
           </span>
         </div>
         <div>

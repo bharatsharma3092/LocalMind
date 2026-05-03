@@ -88,6 +88,7 @@ export interface LLMApi {
   cancelStream: (streamId: string) => Promise<void>
   listModels: (provider: string) => Promise<IPCResponse<ModelInfo[]>>
   fetchCustomModels: (data: { baseUrl: string; apiKey?: string }) => Promise<IPCResponse<{ id: string; name: string }[]>>
+  refinePrompt: (req: LLMRequest & { prompt: string }) => Promise<IPCResponse<string>>
   estimateCost: (req: LLMRequest) => Promise<IPCResponse<TokenUsage>>
   onChunk: (streamId: string, cb: (chunk: LLMStreamChunk) => void) => () => void
   onDone: (streamId: string, cb: (usage: TokenUsage) => void) => () => void
@@ -233,6 +234,14 @@ export interface WebSearchApi {
   setEnabled: (enabled: boolean) => Promise<IPCResponse<void>>
 }
 
+export interface ClaudeProxyApi {
+  getSettings: () => Promise<IPCResponse<any>>
+  saveSettings: (settings: any) => Promise<IPCResponse<any>>
+  start: () => Promise<IPCResponse<any>>
+  stop: () => Promise<IPCResponse<any>>
+  status: () => Promise<IPCResponse<any>>
+}
+
 export interface LocalMindAPI {
   llm: LLMApi
   db: DbApi
@@ -249,6 +258,7 @@ export interface LocalMindAPI {
   file: FileApi
   url: UrlApi
   websearch: WebSearchApi
+  claudeProxy: ClaudeProxyApi
 }
 
 declare global {

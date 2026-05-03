@@ -15,6 +15,14 @@ const log = {
   error: (fn: string, msg: string, data?: unknown) => console.error(`[ChatInput][${fn}] [ERROR] ${msg}`, data !== undefined ? data : ''),
 }
 
+function appendSpeechText(base: string, next: string): string {
+  const cleanBase = base.trim()
+  const cleanNext = next.trim()
+  if (!cleanNext) return cleanBase
+  if (!cleanBase) return cleanNext
+  return `${cleanBase} ${cleanNext}`
+}
+
 interface AttachedContext {
   id: string
   type: 'file' | 'url'
@@ -34,6 +42,9 @@ interface Props {
 export function ChatInput({ conversationId, disabled = false, isLanding = false, forcedAgent = null, workspacePath = null, compactTools = false }: Props) {
   const [input, setInput] = useState('')
   const [showSkillLauncher, setShowSkillLauncher] = useState(false)
+  const [showSkillCreator, setShowSkillCreator] = useState(false)
+  const [skillDraft, setSkillDraft] = useState({ name: '', description: '', systemPrompt: '' })
+  const [creatingSkill, setCreatingSkill] = useState(false)
   const [attachedContexts, setAttachedContexts] = useState<AttachedContext[]>([])
   const [urlInput, setUrlInput] = useState('')
   const [showUrlInput, setShowUrlInput] = useState(false)
@@ -41,6 +52,10 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
   const [fetchingUrl, setFetchingUrl] = useState(false)
   const [webSearchActive, setWebSearchActive] = useState(false)
   const [searching, setSearching] = useState(false)
+  const [autoRefinePrompt, setAutoRefinePrompt] = useState(false)
+  const [refiningPrompt, setRefiningPrompt] = useState(false)
+  const [listening, setListening] = useState(false)
+  const [speechSupported, setSpeechSupported] = useState(true)
   const [mcpServers, setMcpServers] = useState<{ id: string; name: string; status: string }[]>([])
   const [showMcpMenu, setShowMcpMenu] = useState(false)
   const [installedMcps, setInstalledMcps] = useState<{ id: string; name: string; enabled: boolean; config: any }[]>([])
@@ -48,12 +63,41 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
   const mcpMenuRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const recognitionRef = useRef<any>(null)
+  const listeningRef = useRef(false)
+  const transcriptBaseRef = useRef('')
+  const restartTimerRef = useRef<number | null>(null)
   const { isStreaming, addMessage, createConversation } = useChatStore()
   const conversations = useChatStore((state) => state.conversations)
   const { selectedModel } = useProviderStore()
   const { startStream, cancelStream } = useStreaming()
   const { webSearchEnabled } = useSettingsStore()
   const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
+
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    setSpeechSupported(!!SpeechRecognition)
+  }, [])
+
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.rows = 1
+    textarea.style.height = 'auto'
+    const newHeight = Math.min(textarea.scrollHeight, 200)
+    textarea.style.height = `${newHeight}px`
+    if (newHeight > 40) {
+      textarea.rows = Math.floor(newHeight / 20)
+    }
+  }, [input])
+
+  useEffect(() => {
+    return () => {
+      listeningRef.current = false
+      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
+      recognitionRef.current?.stop?.()
+    }
+  }, [])
 
   // Poll MCP server status
   useEffect(() => {
@@ -195,6 +239,102 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     setAttachedContexts((prev) => prev.filter((c) => c.id !== id))
   }, [])
 
+  const toggleMicrophone = useCallback(async () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      setSpeechSupported(false)
+      return
+    }
+
+    if (listeningRef.current) {
+      listeningRef.current = false
+      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
+      recognitionRef.current?.stop()
+      setListening(false)
+      return
+    }
+
+    try {
+      await navigator.mediaDevices?.getUserMedia?.({ audio: true })
+    } catch (err: any) {
+      log.warn('toggleMicrophone', 'Microphone permission was not granted', err?.message)
+    }
+
+    listeningRef.current = true
+    transcriptBaseRef.current = input.trim()
+    setListening(true)
+
+    const startRecognition = () => {
+      if (!listeningRef.current) return
+
+      const recognition = new SpeechRecognition()
+      recognition.lang = navigator.language || 'en-US'
+      recognition.interimResults = true
+      recognition.continuous = true
+
+      recognition.onresult = (event: any) => {
+        let finalText = ''
+        let interimText = ''
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0]?.transcript ?? ''
+          if (event.results[i].isFinal) finalText = appendSpeechText(finalText, transcript)
+          else interimText = appendSpeechText(interimText, transcript)
+        }
+
+        if (finalText) transcriptBaseRef.current = appendSpeechText(transcriptBaseRef.current, finalText)
+        setInput(interimText ? appendSpeechText(transcriptBaseRef.current, interimText) : transcriptBaseRef.current)
+        textareaRef.current?.focus()
+      }
+
+      recognition.onend = () => {
+        if (!listeningRef.current) {
+          setListening(false)
+          return
+        }
+        restartTimerRef.current = window.setTimeout(startRecognition, 150)
+      }
+
+      recognition.onerror = (event: any) => {
+        const error = event?.error ?? ''
+        if (error === 'not-allowed' || error === 'service-not-allowed') {
+          listeningRef.current = false
+          setListening(false)
+        }
+      }
+
+      recognitionRef.current = recognition
+      recognition.start()
+    }
+
+    startRecognition()
+  }, [input])
+
+  const createSkillFromTextbox = useCallback(async () => {
+    const name = skillDraft.name.trim()
+    const systemPrompt = skillDraft.systemPrompt.trim()
+    if (!name || !systemPrompt) return
+    setCreatingSkill(true)
+    try {
+      const id = `user.${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || Date.now()}`
+      await window.localmind?.skill?.create?.({
+        id,
+        name,
+        description: skillDraft.description.trim() || `Custom skill: ${name}`,
+        category: 'User',
+        author: 'You',
+        version: '1.0.0',
+        icon: 'auto_awesome',
+        systemPrompt,
+      })
+      setInput((prev) => `${prev}${prev.trim() ? ' ' : ''}[${name}] `)
+      setSkillDraft({ name: '', description: '', systemPrompt: '' })
+      setShowSkillCreator(false)
+      textareaRef.current?.focus()
+    } finally {
+      setCreatingSkill(false)
+    }
+  }, [skillDraft])
+
   const handleSend = useCallback(async () => {
     let currentConvId = conversationId
     let personaIdForRequest = conversations.find((conversation) => conversation.id === currentConvId)?.personaId ?? draftPersonaId ?? null
@@ -230,6 +370,27 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
       })
       finalContent = [...contextParts, content].filter(Boolean).join('\n\n')
       setAttachedContexts([])
+    }
+
+    if (autoRefinePrompt && finalContent.trim()) {
+      setRefiningPrompt(true)
+      try {
+        const res = await window.localmind?.llm?.refinePrompt?.({
+          prompt: finalContent,
+          messages: [],
+          model: selectedModel?.id ?? 'qwen2.5:7b',
+          provider: (selectedModel?.provider as any) ?? 'ollama',
+          customProviderId: selectedModel?.customProviderId,
+          stream: false,
+        } as any)
+        if (res?.success && res.data?.trim()) {
+          finalContent = res.data.trim()
+        }
+      } catch (err: any) {
+        log.warn('handleSend', 'Prompt refinement failed; sending original prompt', err?.message)
+      } finally {
+        setRefiningPrompt(false)
+      }
     }
 
     // Perform web search if active
@@ -286,7 +447,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     }
 
     await startStream(currentConvId, request)
-  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId, forcedAgent, workspacePath])
+  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId, forcedAgent, workspacePath, autoRefinePrompt, webSearchActive, webSearchEnabled])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -334,11 +495,57 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
                 setShowSkillLauncher(false)
                 textareaRef.current?.focus()
               }}
+              onCreateSkill={() => {
+                setShowSkillLauncher(false)
+                setShowSkillCreator(true)
+              }}
               onClose={() => {
                 setShowSkillLauncher(false)
                 if (input === '/') setInput('')
               }}
             />
+          </div>
+        )}
+
+        {showSkillCreator && (
+          <div className="absolute left-1/2 bottom-full z-50 mb-3 w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-outline-variant bg-surface-container-low p-4 shadow-2xl">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-bold text-on-surface">Create Skill</p>
+                <p className="text-xs text-on-surface-variant">Add a reusable instruction directly from the textbox.</p>
+              </div>
+              <button onClick={() => setShowSkillCreator(false)} className="rounded-lg p-1 text-on-surface-variant hover:bg-surface-container hover:text-on-surface">
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+            <div className="grid gap-3">
+              <input
+                value={skillDraft.name}
+                onChange={(e) => setSkillDraft((draft) => ({ ...draft, name: e.target.value }))}
+                placeholder="Skill name"
+                className="rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+              />
+              <input
+                value={skillDraft.description}
+                onChange={(e) => setSkillDraft((draft) => ({ ...draft, description: e.target.value }))}
+                placeholder="Short description"
+                className="rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+              />
+              <textarea
+                value={skillDraft.systemPrompt}
+                onChange={(e) => setSkillDraft((draft) => ({ ...draft, systemPrompt: e.target.value }))}
+                placeholder="System prompt for this skill"
+                rows={4}
+                className="resize-y rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+              />
+              <button
+                onClick={createSkillFromTextbox}
+                disabled={creatingSkill || !skillDraft.name.trim() || !skillDraft.systemPrompt.trim()}
+                className="rounded-lg bg-primary-container px-4 py-2 text-sm font-bold text-white hover:bg-accent-hover disabled:opacity-40"
+              >
+                {creatingSkill ? 'Creating...' : 'Create Skill'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -396,16 +603,28 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
           )}
 
           {/* Textarea */}
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={handleTextareaChange}
-            onKeyDown={handleKeyDown}
-            placeholder={isInert ? (isLanding ? 'What can I help you with?' : 'Start a conversation first...') : 'Message LocalMind... Use / to trigger skills and, @ for commands'}
-            rows={1}
-            className="w-full bg-transparent border-none text-on-surface placeholder:text-on-surface-variant/50 resize-none focus:ring-0 text-[16px] leading-relaxed px-3 py-2 min-h-[36px] max-h-[200px] overflow-y-auto"
-            disabled={isInert || isCreatingConv}
-          />
+          <div className="relative">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={handleTextareaChange}
+              onKeyDown={handleKeyDown}
+              placeholder={isInert ? (isLanding ? 'What can I help you with?' : 'Start a conversation first...') : 'Message LocalMind... Use / to trigger skills and, @ for commands'}
+              rows={1}
+              className="w-full bg-transparent border-none text-on-surface placeholder:text-on-surface-variant/50 resize-none focus:ring-0 text-[16px] leading-relaxed pl-3 pr-12 py-2 min-h-[36px] max-h-[200px] overflow-y-auto"
+              disabled={isInert || isCreatingConv}
+            />
+            <button
+              onClick={toggleMicrophone}
+              disabled={isStreaming || isInert || !speechSupported}
+              className={`absolute right-2 top-1.5 flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-40 ${
+                listening ? 'bg-error/15 text-error' : 'text-on-surface-variant hover:text-secondary hover:bg-secondary/10'
+              }`}
+              title={speechSupported ? (listening ? 'Stop listening' : 'Dictate message') : 'Speech recognition is not available in this desktop runtime'}
+            >
+              <span className="material-symbols-outlined text-[20px]">{listening ? 'mic_off' : 'mic'}</span>
+            </button>
+          </div>
 
           {/* Bottom Toolbar */}
           <div className="flex items-center justify-between px-2 pb-1 pt-2 border-t border-surface-container-highest/50">
@@ -502,6 +721,19 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
                 <span className="material-symbols-outlined text-[20px]">link</span>
               </button>
               <div className="w-px h-4 bg-surface-container-highest mx-2"></div>
+              <button
+                onClick={() => setAutoRefinePrompt((value) => !value)}
+                disabled={isStreaming || isInert || refiningPrompt}
+                className={`px-2 py-1 rounded-md text-[12px] font-semibold flex items-center gap-1 transition-colors disabled:opacity-40 ${
+                  autoRefinePrompt
+                    ? 'bg-tertiary-container text-white border border-tertiary-container'
+                    : 'bg-tertiary/10 text-tertiary border border-tertiary/20 hover:bg-tertiary/20'
+                }`}
+                title="Refine your message with the selected model before answering"
+              >
+                <span className="material-symbols-outlined text-[14px]">{refiningPrompt ? 'sync' : 'auto_fix_high'}</span>
+                {refiningPrompt ? 'Refining...' : 'Refine'}
+              </button>
               <button
                 onClick={() => setWebSearchActive(!webSearchActive)}
                 disabled={!webSearchEnabled || searching}

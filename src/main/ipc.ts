@@ -26,6 +26,7 @@ import { initRagIndex, indexDocument, queryDocuments, getRagStatus, listDocument
 import { exportAllData, importAllData, exportConversation } from './data/manager'
 import { searchWeb } from './websearch/service'
 import type { WebSearchProvider } from './websearch/service'
+import { getClaudeCodeProxySettings, getClaudeCodeProxyStatus, saveClaudeCodeProxySettings, startClaudeCodeProxy, stopClaudeCodeProxy } from './claude-code/proxy'
 
 const log = {
   info:  (tag: string, msg: string, data?: unknown) =>
@@ -528,6 +529,59 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     )
     log.info('estimateCost', 'Token estimate', { model: request.model, promptTokens })
     return { promptTokens, completionTokens: request.maxTokens ?? 1024 }
+  }))
+
+  ipcMain.handle('llm:refinePrompt', safeHandle(async (_, request: LLMRequest & { prompt: string }) => {
+    llmRouter.reloadCustomProviders()
+    const sourcePrompt = String(request.prompt ?? '').trim()
+    if (!sourcePrompt) return ''
+
+    const refineRequest: LLMRequest = {
+      ...request,
+      stream: false,
+      maxTokens: request.maxTokens ?? 700,
+      temperature: request.temperature ?? 0.2,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You refine rough dictated or typed user input into a clear prompt for another AI.',
+            'Preserve intent, facts, names, constraints, and the user voice.',
+            'Do not answer the prompt. Return only the improved prompt text.',
+          ].join('\n'),
+        },
+        { role: 'user', content: sourcePrompt },
+      ],
+    }
+
+    let refined = ''
+    for await (const chunk of llmRouter.complete(refineRequest)) {
+      if (chunk.type === 'text' && chunk.content) refined += chunk.content
+      if (chunk.type === 'error') throw new Error(chunk.content ?? 'Prompt refinement failed')
+    }
+    return refined.trim() || sourcePrompt
+  }))
+
+  // --- Claude Code Proxy -----------------------------------------------------
+
+  ipcMain.handle('claudeProxy:getSettings', safeHandle(async () => {
+    return getClaudeCodeProxySettings()
+  }))
+
+  ipcMain.handle('claudeProxy:saveSettings', safeHandle(async (_, settings: any) => {
+    return await saveClaudeCodeProxySettings(settings)
+  }))
+
+  ipcMain.handle('claudeProxy:start', safeHandle(async () => {
+    return await startClaudeCodeProxy()
+  }))
+
+  ipcMain.handle('claudeProxy:stop', safeHandle(async () => {
+    return stopClaudeCodeProxy()
+  }))
+
+  ipcMain.handle('claudeProxy:status', safeHandle(async () => {
+    return getClaudeCodeProxyStatus()
   }))
 
   // --- DB --------------------------------------------------------------------

@@ -209,7 +209,7 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
       ) : (
         <div className="w-8 h-8 rounded-lg flex-shrink-0 bg-secondary-container/20 border border-secondary-container/30 flex items-center justify-center text-secondary-container">
           <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 1" }}>
-            psychology
+            memory
           </span>
         </div>
       )}

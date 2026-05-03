@@ -50,17 +50,6 @@ const agentPowers: Record<string, string[]> = {
   code: ['Glob', 'Grep', 'Read', 'Write', 'Delete', 'NPM', 'MCP', 'Skills'],
 }
 
-const toolAccessCopy: Record<string, string[]> = {
-  cowork: [
-    'Planning, review, debugging, lightweight implementation guidance, MCP tools, and Skills.',
-    'Destructive actions are reserved for the Code workspace.',
-  ],
-  code: [
-    'Glob, grep, read, write, npm scripts, MCP tools, and Skills.',
-    'Delete is available only after a confirmation prompt.',
-  ],
-}
-
 const EMPTY_MESSAGES: never[] = []
 
 export function AgentsPage() {
@@ -136,8 +125,6 @@ export function AgentsPage() {
   const hasStartedConversation = currentMessages.length > 0
   const selectedQuickStarts = quickStarts[selectedAgent?.id ?? 'cowork'] ?? quickStarts.cowork
   const selectedPowers = agentPowers[selectedAgent?.id ?? 'cowork'] ?? agentPowers.cowork
-  const selectedToolAccess = toolAccessCopy[selectedAgent?.id ?? 'cowork'] ?? toolAccessCopy.cowork
-
   const selectFolder = async () => {
     const res = await window.localmind?.file?.selectFolder?.()
     if (res?.success && res.data) {
@@ -179,15 +166,6 @@ export function AgentsPage() {
         </div>
 
         <div className="mt-6 rounded-xl border border-outline-variant bg-surface-container-low p-3">
-          <p className="text-xs font-bold uppercase tracking-wider text-on-surface">Tool access</p>
-          <div className="mt-3 space-y-2 text-xs leading-5 text-on-surface-variant">
-            {selectedToolAccess.map((line) => (
-              <p key={line}>{line}</p>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-4 rounded-xl border border-outline-variant bg-surface-container-low p-3">
           <p className="text-xs font-bold uppercase tracking-wider text-on-surface">Workspace folder</p>
           <p className="mt-2 line-clamp-3 text-xs leading-5 text-on-surface-variant">
             {workspacePath ?? 'No folder selected. Tools use the app workspace.'}

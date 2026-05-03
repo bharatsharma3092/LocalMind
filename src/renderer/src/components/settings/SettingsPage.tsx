@@ -7,8 +7,9 @@ import { PersonaLibrary } from '../personas/PersonaLibrary'
 
 type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' | 'sunset' | 'gold' | 'copper'
 type WebSearchProvider = 'tavily' | 'serper' | 'exa' | 'duckduckgo'
-type SettingsTab = 'general' | 'profile' | 'memory' | 'models' | 'mcp' | 'personas' | 'data'
+type SettingsTab = 'general' | 'profile' | 'memory' | 'models' | 'claudeProxy' | 'mcp' | 'personas' | 'data'
 type MemoryEntry = { id: string; content: string; source: string; enabled: boolean; createdAt: number }
+type ProxyRole = 'opus' | 'sonnet' | 'haiku'
 
 const colorOptions: { id: ColorTheme; label: string; hex: string }[] = [
   { id: 'default', label: 'Indigo', hex: '#6c5ce7' },
@@ -31,6 +32,7 @@ const tabLabels: Record<SettingsTab, string> = {
   profile: 'Profile',
   memory: 'Memory',
   models: 'Models',
+  claudeProxy: 'Claude Code Proxy',
   mcp: 'MCP Servers',
   personas: 'Personas',
   data: 'Data',
@@ -44,7 +46,7 @@ export function SettingsPage({
   initialTab?: SettingsTab
 }) {
   const { theme, colorTheme, privacyMode, webSearchEnabled, webSearchProvider, setTheme, setColorTheme, setPrivacyMode, setWebSearchEnabled, setWebSearchProvider } = useSettingsStore()
-  const { customProviders, saveCustomProviders, refreshAllModels } = useProviderStore()
+  const { customProviders, saveCustomProviders, refreshAllModels, availableModels } = useProviderStore()
   const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
   const setDraftPersona = usePersonaStore((state) => state.setDraftPersona)
   const [tab, setTab] = useState<SettingsTab>(initialTab)
@@ -79,6 +81,9 @@ export function SettingsPage({
   const [fetchedModels, setFetchedModels] = useState<{ id: string; name: string; selected: boolean }[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
   const [modelFetchStatus, setModelFetchStatus] = useState('')
+  const [claudeProxy, setClaudeProxy] = useState<any>({ enabled: false, port: 4000, apiKey: 'localmind-proxy-key' })
+  const [claudeProxyStatus, setClaudeProxyStatus] = useState<any>(null)
+  const [savingClaudeProxy, setSavingClaudeProxy] = useState(false)
 
   useEffect(() => {
     window.localmind.settings.get('ollamaUrl').then((r) => {
@@ -117,6 +122,12 @@ export function SettingsPage({
     })
     window.localmind.settings.get('memories').then((r) => {
       if (r.success && Array.isArray(r.data)) setMemories(r.data)
+    })
+    window.localmind.claudeProxy?.getSettings?.().then((r) => {
+      if (r.success && r.data) setClaudeProxy(r.data)
+    })
+    window.localmind.claudeProxy?.status?.().then((r) => {
+      if (r.success) setClaudeProxyStatus(r.data)
     })
   }, [])
 
@@ -386,6 +397,30 @@ export function SettingsPage({
     input.click()
   }
 
+  const updateClaudeProxyRole = (role: ProxyRole, value: string) => {
+    const model = availableModels.find((item) => `${item.provider}|${item.customProviderId ?? ''}|${item.id}` === value)
+    setClaudeProxy((prev: any) => ({ ...prev, [`${role}Model`]: model }))
+  }
+
+  const saveClaudeProxy = async (startAfterSave = false) => {
+    setSavingClaudeProxy(true)
+    try {
+      const saved = await window.localmind.claudeProxy.saveSettings(claudeProxy)
+      if (saved.success && saved.data) setClaudeProxy(saved.data)
+      if (startAfterSave) {
+        const started = await window.localmind.claudeProxy.start()
+        if (started.success) setClaudeProxyStatus(started.data)
+      }
+    } finally {
+      setSavingClaudeProxy(false)
+    }
+  }
+
+  const stopClaudeProxy = async () => {
+    const stopped = await window.localmind.claudeProxy.stop()
+    if (stopped.success) setClaudeProxyStatus(stopped.data)
+  }
+
   return (
     <div className={onClose ? 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-6' : 'h-full min-h-0 overflow-hidden bg-background p-6'}>
       <div className={onClose ? 'bg-surface-container rounded-2xl shadow-2xl w-[640px] max-w-full max-h-[85vh] flex flex-col border border-outline-variant overflow-hidden' : 'mx-auto flex h-full max-w-6xl flex-col overflow-hidden border border-outline-variant bg-surface-container'}>
@@ -401,7 +436,7 @@ export function SettingsPage({
 
         {/* Tabs - fixed height, no vertical scroll */}
         <div className="flex gap-1 px-5 pt-4 border-b border-outline-variant overflow-x-auto overflow-y-hidden flex-shrink-0 h-[52px]">
-          {(['general', 'profile', 'memory', 'models', 'mcp', 'personas', 'data'] as const).map((t) => (
+          {(['general', 'profile', 'memory', 'models', 'claudeProxy', 'mcp', 'personas', 'data'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -1023,6 +1058,103 @@ export function SettingsPage({
                 )}
               </section>
             </>
+          ) : tab === 'claudeProxy' ? (
+            <section className="space-y-5">
+              <div>
+                <h3 className="text-[12px] font-semibold text-on-surface-variant uppercase tracking-wider mb-3">Claude Code Proxy</h3>
+                <p className="text-sm leading-6 text-on-surface-variant">
+                  Route Claude Code through a local LiteLLM proxy and map Claude tiers to any model available in LocalMind.
+                </p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-xs text-on-surface-variant">Proxy Port</label>
+                  <input
+                    type="number"
+                    value={claudeProxy.port ?? 4000}
+                    onChange={(e) => setClaudeProxy((prev: any) => ({ ...prev, port: Number(e.target.value) || 4000 }))}
+                    className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-on-surface-variant">Proxy API Key</label>
+                  <input
+                    type="password"
+                    value={claudeProxy.apiKey ?? ''}
+                    onChange={(e) => setClaudeProxy((prev: any) => ({ ...prev, apiKey: e.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {([
+                  ['opus', 'Opus'],
+                  ['sonnet', 'Sonnet'],
+                  ['haiku', 'Haiku'],
+                ] as const).map(([role, label]) => {
+                  const selected = claudeProxy[`${role}Model`]
+                  const value = selected ? `${selected.provider}|${selected.customProviderId ?? ''}|${selected.id}` : ''
+                  return (
+                    <div key={role}>
+                      <label className="text-xs text-on-surface-variant">{label} model</label>
+                      <select
+                        value={value}
+                        onChange={(e) => updateClaudeProxyRole(role, e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                      >
+                        <option value="">Choose a model</option>
+                        {availableModels.map((model) => (
+                          <option
+                            key={`${model.provider}-${model.customProviderId ?? ''}-${model.id}`}
+                            value={`${model.provider}|${model.customProviderId ?? ''}|${model.id}`}
+                          >
+                            {model.provider}{model.customProviderId ? `/${model.customProviderId}` : ''}: {model.name || model.id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={() => saveClaudeProxy(false)}
+                    disabled={savingClaudeProxy}
+                    className="rounded-lg bg-surface-bright px-4 py-2 text-sm font-semibold text-on-surface hover:bg-surface-container-high disabled:opacity-50"
+                  >
+                    {savingClaudeProxy ? 'Saving...' : 'Save Config'}
+                  </button>
+                  <button
+                    onClick={() => saveClaudeProxy(true)}
+                    disabled={savingClaudeProxy}
+                    className="rounded-lg bg-primary-container px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover disabled:opacity-50"
+                  >
+                    Start Proxy
+                  </button>
+                  <button
+                    onClick={stopClaudeProxy}
+                    className="rounded-lg border border-outline-variant px-4 py-2 text-sm font-semibold text-on-surface-variant hover:text-on-surface"
+                  >
+                    Stop
+                  </button>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${claudeProxyStatus?.running ? 'bg-emerald-500/15 text-emerald-400' : 'bg-surface-container-high text-on-surface-variant'}`}>
+                    {claudeProxyStatus?.running ? 'Running' : 'Stopped'}
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-2 text-xs leading-5 text-on-surface-variant">
+                  <p>Base URL: <span className="font-mono text-on-surface">{claudeProxy.baseUrl ?? `http://localhost:${claudeProxy.port ?? 4000}`}</span></p>
+                  <p>Config: <span className="font-mono text-on-surface">{claudeProxy.configPath ?? claudeProxyStatus?.configPath ?? 'Save to generate config'}</span></p>
+                  <p>Claude Code can use the proxy with Anthropic-compatible model names for Opus, Sonnet, and Haiku.</p>
+                </div>
+                {claudeProxyStatus?.output && (
+                  <pre className="mt-3 max-h-40 overflow-auto rounded-lg bg-surface-container px-3 py-2 text-xs text-on-surface-variant">{claudeProxyStatus.output}</pre>
+                )}
+              </div>
+            </section>
           ) : tab === 'mcp' ? (
             <McpConfigEditor />
           ) : tab === 'personas' ? (

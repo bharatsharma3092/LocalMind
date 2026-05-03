@@ -30,6 +30,14 @@ export interface AppSettings {
     enabled: boolean
     createdAt: number
   }[]
+  claudeCodeProxy?: {
+    enabled: boolean
+    port: number
+    apiKey: string
+    opusModel?: any
+    sonnetModel?: any
+    haikuModel?: any
+  }
 }
 
 const defaults: AppSettings = {
@@ -56,6 +64,11 @@ const defaults: AppSettings = {
   },
   memoryEnabled: true,
   memories: [],
+  claudeCodeProxy: {
+    enabled: false,
+    port: 4000,
+    apiKey: 'localmind-proxy-key',
+  },
 }
 
 export const appStore = new ElectronStore<AppSettings>({ defaults })
