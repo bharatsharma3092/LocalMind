@@ -562,6 +562,146 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return refined.trim() || sourcePrompt
   }))
 
+  ipcMain.handle('llm:consensus', safeHandle(async (_, data: { query: string; models: { provider: string; model: string; customProviderId?: string }[]; synthesizer: { provider: string; model: string; customProviderId?: string } }) => {
+    const { query, models, synthesizer } = data
+    if (!models || models.length < 2) throw new Error('At least 2 models are required for consensus.')
+    if (!synthesizer) throw new Error('A synthesizer model must be selected.')
+
+    llmRouter.reloadCustomProviders()
+    const streamId = createStreamId()
+    initStreamBuffer(streamId, win)
+
+    // Run in background so we return the streamId immediately
+    ;(async () => {
+      try {
+        // Phase 1: Query all models in parallel
+        const candidatePromises = models.map(async (m) => {
+          const request: LLMRequest = {
+            messages: [{ role: 'user', content: query }],
+            model: m.model,
+            provider: m.provider as any,
+            customProviderId: m.customProviderId,
+            stream: false,
+          }
+          let text = ''
+          for await (const chunk of llmRouter.complete(request)) {
+            if (chunk.type === 'text' && chunk.content) text += chunk.content
+          }
+          return { model: m.model, provider: m.provider, text }
+        })
+
+        const results = await Promise.allSettled(candidatePromises)
+        const candidates = results.map((r, i) => {
+          if (r.status === 'fulfilled') return r.value
+          return { model: models[i].model, provider: models[i].provider, text: `[Error: ${(r.reason as Error)?.message ?? 'Failed'}]` }
+        })
+
+        // Send candidate results as an info chunk
+        const candidatesSummary = candidates.map((c, i) => `--- Model ${i + 1}: ${c.model} (${c.provider}) ---\n${c.text}`).join('\n\n')
+        sendChunk(win, streamId, { type: 'text', content: `<!--CANDIDATES_JSON:${JSON.stringify(candidates)}-->\n\n` })
+
+        // Phase 2: Synthesize
+        const synthesisPrompt = [
+          'You are a Consensus Synthesizer. Multiple AI models were asked the same question. Your job is to produce ONE unified answer.',
+          '',
+          'Rules:',
+          '1. Start with a "## Consensus" section summarizing what ALL models agree on.',
+          '2. Then add a "## Disagreements" section listing specific points where models differ, showing each model\'s position.',
+          '3. If there are unresolved conflicts, add a "## Open Questions" section.',
+          '4. Write in clear, direct language. Do not simply concatenate the responses.',
+          '5. Attribute specific claims to their source model when showing disagreements.',
+          '',
+          `The user\'s question was: "${query}"`,
+          '',
+          'Here are the model responses:',
+          '',
+          ...candidates.map((c, i) => `### Model ${i + 1}: ${c.model}\n${c.text}`),
+          '',
+          'Now produce the unified consensus answer:',
+        ].join('\n')
+
+        const synthRequest: LLMRequest = {
+          messages: [{ role: 'user', content: synthesisPrompt }],
+          model: synthesizer.model,
+          provider: synthesizer.provider as any,
+          customProviderId: synthesizer.customProviderId,
+          stream: true,
+        }
+
+        for await (const chunk of llmRouter.complete(synthRequest)) {
+          if (chunk.type === 'text' && chunk.content) {
+            sendChunk(win, streamId, { type: 'text', content: chunk.content })
+          }
+          if (chunk.type === 'done') {
+            sendDone(win, streamId, chunk.usage ?? { promptTokens: 0, completionTokens: 0 })
+          }
+        }
+      } catch (err: any) {
+        sendError(win, streamId, err?.message ?? 'Consensus failed')
+      }
+    })()
+
+    return { streamId }
+  }))
+
+  ipcMain.handle('llm:transcribe', safeHandle(async (_, data: { audio: number[]; provider: string; customProviderId?: string }) => {
+    const { audio, provider } = data
+    const audioBuffer = Buffer.from(audio)
+
+    if (provider === 'openai' || provider === 'openrouter') {
+      const apiKey = provider === 'openai'
+        ? await getSecret('openai-api-key')
+        : await getSecret('openrouter-api-key')
+      if (!apiKey) throw new Error(`No API key configured for ${provider}. Add one in Settings.`)
+
+      const baseUrl = provider === 'openai'
+        ? 'https://api.openai.com/v1'
+        : 'https://openrouter.ai/api/v1'
+
+      const blob = new Blob([audioBuffer], { type: 'audio/webm' })
+      const formData = new FormData()
+      formData.append('file', blob, 'audio.webm')
+      formData.append('model', 'whisper-1')
+
+      const response = await fetch(`${baseUrl}/audio/transcriptions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '')
+        throw new Error(`Transcription failed (${response.status}): ${errText}`)
+      }
+
+      const result = await response.json() as { text?: string }
+      return result.text ?? ''
+    }
+
+    if (provider === 'ollama') {
+      const audioBase64 = audioBuffer.toString('base64')
+      const response = await fetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'whisper',
+          messages: [{ role: 'user', content: 'Transcribe this audio.', images: [audioBase64] }],
+          stream: false,
+        }),
+      })
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '')
+        throw new Error(`Ollama transcription failed (${response.status}): ${errText}. Ensure a whisper model is available via "ollama pull whisper".`)
+      }
+
+      const result = await response.json() as { message?: { content?: string } }
+      return result.message?.content ?? ''
+    }
+
+    throw new Error(`Speech-to-text is not supported for provider "${provider}". Use OpenAI or Ollama for transcription.`)
+  }))
+
   // --- Claude Code Proxy -----------------------------------------------------
 
   ipcMain.handle('claudeProxy:getSettings', safeHandle(async () => {

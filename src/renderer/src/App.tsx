@@ -4,6 +4,7 @@ import { ChatView } from './components/chat/ChatView'
 import { McpManagementPage } from './components/mcp/McpManagementPage'
 import { SkillsPage } from './components/skills/SkillsPage'
 import { AgentsPage } from './components/agents/AgentsPage'
+import { ConsensusPage } from './components/consensus/ConsensusPage'
 import { ToastContainer } from './components/ui/ToastContainer'
 import { SettingsPage } from './components/settings/SettingsPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -60,6 +61,7 @@ function App() {
           {currentPage === 'mcp' && <McpManagementPage />}
           {currentPage === 'skills' && <SkillsPage />}
           {currentPage === 'agents' && <AgentsPage />}
+          {currentPage === 'consensus' && <ConsensusPage />}
           {currentPage === 'settings' && (
             <SettingsPage initialTab={settingsTab} />
           )}

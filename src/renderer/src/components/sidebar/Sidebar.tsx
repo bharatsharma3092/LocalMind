@@ -5,7 +5,7 @@ import { usePersonaStore } from '../../stores/personaStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useRagStore } from '../../stores/ragStore'
 
-export type AppPage = 'chat' | 'mcp' | 'skills' | 'agents' | 'settings'
+export type AppPage = 'chat' | 'mcp' | 'skills' | 'agents' | 'consensus' | 'settings'
 
 interface Props {
   currentPage: AppPage
@@ -21,6 +21,7 @@ type NavItem = {
 
 const mainNav: NavItem[] = [
   { id: 'chat', label: 'Conversations', icon: 'forum' },
+  { id: 'consensus', label: 'Consensus', icon: 'groups' },
   { id: 'agents', label: 'Agents', icon: 'smart_toy' },
   { id: 'skills', label: 'Skills', icon: 'psychology' },
   { id: 'mcp', label: 'MCP Servers', icon: 'hub' },

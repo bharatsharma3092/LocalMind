@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('localmind', {
     fetchCustomModels: (data: { baseUrl: string; apiKey?: string }) => ipcRenderer.invoke('llm:fetchCustomModels', data),
     refinePrompt: (req: any) => ipcRenderer.invoke('llm:refinePrompt', req),
     estimateCost: (req: any) => ipcRenderer.invoke('llm:estimateCost', req),
+    transcribe: (data: { audio: number[]; provider: string; customProviderId?: string }) => ipcRenderer.invoke('llm:transcribe', data),
+    consensus: (req: any) => ipcRenderer.invoke('llm:consensus', req),
     signalReady: (streamId: string) => ipcRenderer.send(`llm:ready:${streamId}`, streamId),
 
     onChunk: (streamId: string, cb: (chunk: any) => void) => {

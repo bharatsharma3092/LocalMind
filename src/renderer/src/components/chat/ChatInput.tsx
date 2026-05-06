@@ -15,13 +15,6 @@ const log = {
   error: (fn: string, msg: string, data?: unknown) => console.error(`[ChatInput][${fn}] [ERROR] ${msg}`, data !== undefined ? data : ''),
 }
 
-function appendSpeechText(base: string, next: string): string {
-  const cleanBase = base.trim()
-  const cleanNext = next.trim()
-  if (!cleanNext) return cleanBase
-  if (!cleanBase) return cleanNext
-  return `${cleanBase} ${cleanNext}`
-}
 
 interface AttachedContext {
   id: string
@@ -54,19 +47,13 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
   const [searching, setSearching] = useState(false)
   const [autoRefinePrompt, setAutoRefinePrompt] = useState(false)
   const [refiningPrompt, setRefiningPrompt] = useState(false)
-  const [listening, setListening] = useState(false)
-  const [speechSupported, setSpeechSupported] = useState(true)
+  const [showPlusMenu, setShowPlusMenu] = useState(false)
   const [mcpServers, setMcpServers] = useState<{ id: string; name: string; status: string }[]>([])
-  const [showMcpMenu, setShowMcpMenu] = useState(false)
   const [installedMcps, setInstalledMcps] = useState<{ id: string; name: string; enabled: boolean; config: any }[]>([])
   const [isCreatingConv, setIsCreatingConv] = useState(false)
-  const mcpMenuRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const recognitionRef = useRef<any>(null)
-  const listeningRef = useRef(false)
-  const transcriptBaseRef = useRef('')
-  const restartTimerRef = useRef<number | null>(null)
+  const plusMenuRef = useRef<HTMLDivElement>(null)
   const { isStreaming, addMessage, createConversation } = useChatStore()
   const conversations = useChatStore((state) => state.conversations)
   const { selectedModel } = useProviderStore()
@@ -74,10 +61,6 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
   const { webSearchEnabled } = useSettingsStore()
   const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
 
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    setSpeechSupported(!!SpeechRecognition)
-  }, [])
 
   useEffect(() => {
     const textarea = textareaRef.current
@@ -91,13 +74,6 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     }
   }, [input])
 
-  useEffect(() => {
-    return () => {
-      listeningRef.current = false
-      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
-      recognitionRef.current?.stop?.()
-    }
-  }, [])
 
   // Poll MCP server status
   useEffect(() => {
@@ -117,9 +93,9 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     return () => clearInterval(interval)
   }, [])
 
-  // Fetch installed MCPs when menu opens
+  // Fetch installed MCPs when plus menu opens
   useEffect(() => {
-    if (!showMcpMenu) return
+    if (!showPlusMenu) return
     const fetchInstalled = async () => {
       try {
         if (!window.localmind?.mcp?.listSaved) return
@@ -132,19 +108,19 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
       }
     }
     fetchInstalled()
-  }, [showMcpMenu])
+  }, [showPlusMenu])
 
-  // Close MCP menu on outside click
+  // Close plus menu on outside click
   useEffect(() => {
-    if (!showMcpMenu) return
+    if (!showPlusMenu) return
     const handleClick = (e: MouseEvent) => {
-      if (mcpMenuRef.current && !mcpMenuRef.current.contains(e.target as Node)) {
-        setShowMcpMenu(false)
+      if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+        setShowPlusMenu(false)
       }
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
-  }, [showMcpMenu])
+  }, [showPlusMenu])
 
   const toggleMcp = useCallback(async (server: { id: string; name: string; enabled: boolean; config: any }) => {
     const nextEnabled = !server.enabled
@@ -239,75 +215,6 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     setAttachedContexts((prev) => prev.filter((c) => c.id !== id))
   }, [])
 
-  const toggleMicrophone = useCallback(async () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) {
-      setSpeechSupported(false)
-      return
-    }
-
-    if (listeningRef.current) {
-      listeningRef.current = false
-      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
-      recognitionRef.current?.stop()
-      setListening(false)
-      return
-    }
-
-    try {
-      await navigator.mediaDevices?.getUserMedia?.({ audio: true })
-    } catch (err: any) {
-      log.warn('toggleMicrophone', 'Microphone permission was not granted', err?.message)
-    }
-
-    listeningRef.current = true
-    transcriptBaseRef.current = input.trim()
-    setListening(true)
-
-    const startRecognition = () => {
-      if (!listeningRef.current) return
-
-      const recognition = new SpeechRecognition()
-      recognition.lang = navigator.language || 'en-US'
-      recognition.interimResults = true
-      recognition.continuous = true
-
-      recognition.onresult = (event: any) => {
-        let finalText = ''
-        let interimText = ''
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0]?.transcript ?? ''
-          if (event.results[i].isFinal) finalText = appendSpeechText(finalText, transcript)
-          else interimText = appendSpeechText(interimText, transcript)
-        }
-
-        if (finalText) transcriptBaseRef.current = appendSpeechText(transcriptBaseRef.current, finalText)
-        setInput(interimText ? appendSpeechText(transcriptBaseRef.current, interimText) : transcriptBaseRef.current)
-        textareaRef.current?.focus()
-      }
-
-      recognition.onend = () => {
-        if (!listeningRef.current) {
-          setListening(false)
-          return
-        }
-        restartTimerRef.current = window.setTimeout(startRecognition, 150)
-      }
-
-      recognition.onerror = (event: any) => {
-        const error = event?.error ?? ''
-        if (error === 'not-allowed' || error === 'service-not-allowed') {
-          listeningRef.current = false
-          setListening(false)
-        }
-      }
-
-      recognitionRef.current = recognition
-      recognition.start()
-    }
-
-    startRecognition()
-  }, [input])
 
   const createSkillFromTextbox = useCallback(async () => {
     const name = skillDraft.name.trim()
@@ -614,16 +521,6 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
               className="w-full bg-transparent border-none text-on-surface placeholder:text-on-surface-variant/50 resize-none focus:ring-0 text-[16px] leading-relaxed pl-3 pr-12 py-2 min-h-[36px] max-h-[200px] overflow-y-auto"
               disabled={isInert || isCreatingConv}
             />
-            <button
-              onClick={toggleMicrophone}
-              disabled={isStreaming || isInert || !speechSupported}
-              className={`absolute right-2 top-1.5 flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-40 ${
-                listening ? 'bg-error/15 text-error' : 'text-on-surface-variant hover:text-secondary hover:bg-secondary/10'
-              }`}
-              title={speechSupported ? (listening ? 'Stop listening' : 'Dictate message') : 'Speech recognition is not available in this desktop runtime'}
-            >
-              <span className="material-symbols-outlined text-[20px]">{listening ? 'mic_off' : 'mic'}</span>
-            </button>
           </div>
 
           {/* Bottom Toolbar */}
@@ -640,53 +537,78 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
                   <div className="w-px h-4 bg-surface-container-highest mx-2"></div>
                 </>
               )}
-              {/* MCP + button */}
-              <div className="relative" ref={mcpMenuRef}>
+
+              {/* Unified + button with sectioned popup */}
+              <div className="relative" ref={plusMenuRef}>
                 <button
-                  onClick={() => setShowMcpMenu((v) => !v)}
+                  onClick={() => setShowPlusMenu((v) => !v)}
                   disabled={isStreaming || isInert}
                   className="p-2 rounded-lg text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-40"
-                  title="MCP Servers"
+                  title="Attach & Tools"
                 >
                   <span className="material-symbols-outlined text-[20px]">add</span>
                 </button>
-                {showMcpMenu && (
-                  <div className="absolute bottom-full left-0 mb-2 w-64 bg-surface-container border border-outline-variant rounded-xl shadow-xl p-3 z-50">
+                {showPlusMenu && (
+                  <div className="absolute bottom-full left-0 mb-2 w-72 bg-surface-container border border-outline-variant rounded-xl shadow-xl p-3 z-50">
+                    {/* MCP Servers Section */}
                     <div className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-2">
                       MCP Servers
                     </div>
-                    {installedMcps.length === 0 && (
-                      <div className="text-[12px] text-on-surface-variant/70 py-2">
-                        No MCP servers installed.
+                    {installedMcps.length === 0 ? (
+                      <div className="text-[12px] text-on-surface-variant/70 py-1 mb-2">No MCP servers installed.</div>
+                    ) : (
+                      <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto mb-2">
+                        {installedMcps.map((srv) => {
+                          const isConnected = srv.enabled
+                          return (
+                            <div
+                              key={srv.id}
+                              className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-container-high transition-colors"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`material-symbols-outlined text-[16px] ${isConnected ? 'text-emerald-400' : 'text-on-surface-variant/50'}`}>extension</span>
+                                <span className="text-[12px] text-on-surface truncate">{srv.name}</span>
+                              </div>
+                              <button
+                                onClick={() => toggleMcp(srv)}
+                                className={`relative w-8 h-4 rounded-full transition-colors ${isConnected ? 'bg-emerald-500' : 'bg-surface-container-highest'}`}
+                              >
+                                <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${isConnected ? 'translate-x-4' : 'translate-x-0'}`} />
+                              </button>
+                            </div>
+                          )
+                        })}
                       </div>
                     )}
-                    <div className="flex flex-col gap-2 max-h-60 overflow-y-auto">
-                      {installedMcps.map((srv) => {
-                        const isConnected = srv.enabled
-                        return (
-                          <div
-                            key={srv.id}
-                            className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-container-high transition-colors"
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className={`material-symbols-outlined text-[16px] ${isConnected ? 'text-emerald-400' : 'text-on-surface-variant/50'}`}>
-                                extension
-                              </span>
-                              <span className="text-[13px] text-on-surface truncate">{srv.name}</span>
-                            </div>
-                            <button
-                              onClick={() => toggleMcp(srv)}
-                              className={`relative w-9 h-5 rounded-full transition-colors ${isConnected ? 'bg-emerald-500' : 'bg-surface-container-highest'}`}
-                              title={isConnected ? 'Disable' : 'Enable'}
-                            >
-                              <span
-                                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${isConnected ? 'translate-x-4' : 'translate-x-0'}`}
-                              />
-                            </button>
-                          </div>
-                        )
-                      })}
+
+                    <div className="border-t border-outline-variant/50 my-2"></div>
+
+                    {/* Attach Section */}
+                    <div className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-2">
+                      Attach
                     </div>
+                    <button
+                      onClick={() => { fileInputRef.current?.click(); setShowPlusMenu(false) }}
+                      disabled={uploading}
+                      className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-surface-container-high transition-colors text-left"
+                    >
+                      <span className="material-symbols-outlined text-[18px] text-on-surface-variant">attach_file</span>
+                      <span className="text-[12px] text-on-surface">File or Folder</span>
+                    </button>
+
+                    <div className="border-t border-outline-variant/50 my-2"></div>
+
+                    {/* Fetch URL Section */}
+                    <div className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mb-2">
+                      Fetch
+                    </div>
+                    <button
+                      onClick={() => { setShowUrlInput(true); setShowPlusMenu(false) }}
+                      className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-surface-container-high transition-colors text-left"
+                    >
+                      <span className="material-symbols-outlined text-[18px] text-on-surface-variant">link</span>
+                      <span className="text-[12px] text-on-surface">URL</span>
+                    </button>
                   </div>
                 )}
               </div>
@@ -704,22 +626,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
                   if (fileInputRef.current) fileInputRef.current.value = ''
                 }}
               />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isStreaming || isInert || uploading}
-                className="p-2 rounded-lg text-on-surface-variant hover:text-secondary hover:bg-secondary/10 transition-colors disabled:opacity-40"
-                title="Attach file"
-              >
-                <span className="material-symbols-outlined text-[20px]">attach_file</span>
-              </button>
-              <button
-                onClick={() => setShowUrlInput(!showUrlInput)}
-                disabled={isStreaming || isInert}
-                className="p-2 rounded-lg text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-40"
-                title="Fetch URL content"
-              >
-                <span className="material-symbols-outlined text-[20px]">link</span>
-              </button>
+
               <div className="w-px h-4 bg-surface-container-highest mx-2"></div>
               <button
                 onClick={() => setAutoRefinePrompt((value) => !value)}

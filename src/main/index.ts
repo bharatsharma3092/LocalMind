@@ -30,6 +30,9 @@ if (!gotTheLock) {
     session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
       callback(permission === 'media' || permission === 'audioCapture')
     })
+    session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+      return permission === 'media' || permission === 'audioCapture'
+    })
     registerGlobalShortcut()
   })
 }

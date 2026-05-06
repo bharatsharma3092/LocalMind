@@ -82,6 +82,27 @@ export interface ModelInfo {
   supportsToolUse: boolean
 }
 
+// ─── Consensus ────────────────────────────────────
+export interface ConsensusModelSelection {
+  provider: ProviderType
+  model: string
+  customProviderId?: string
+}
+
+export interface ConsensusRequest {
+  query: string
+  models: ConsensusModelSelection[]
+  synthesizer: ConsensusModelSelection
+}
+
+export interface CandidateResponse {
+  model: string
+  provider: string
+  status: 'pending' | 'streaming' | 'done' | 'error'
+  text: string
+  error?: string
+}
+
 // ─── API Interfaces ───────────────────────────────
 export interface LLMApi {
   startStream: (req: LLMRequest) => Promise<IPCResponse<{ streamId: string }>>
@@ -89,6 +110,8 @@ export interface LLMApi {
   listModels: (provider: string) => Promise<IPCResponse<ModelInfo[]>>
   fetchCustomModels: (data: { baseUrl: string; apiKey?: string }) => Promise<IPCResponse<{ id: string; name: string }[]>>
   refinePrompt: (req: LLMRequest & { prompt: string }) => Promise<IPCResponse<string>>
+  transcribe: (data: { audio: number[]; provider: string; customProviderId?: string }) => Promise<IPCResponse<string>>
+  consensus: (req: ConsensusRequest) => Promise<IPCResponse<{ streamId: string }>>
   estimateCost: (req: LLMRequest) => Promise<IPCResponse<TokenUsage>>
   onChunk: (streamId: string, cb: (chunk: LLMStreamChunk) => void) => () => void
   onDone: (streamId: string, cb: (usage: TokenUsage) => void) => () => void
