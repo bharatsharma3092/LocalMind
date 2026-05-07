@@ -1,3 +1,7 @@
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details.
+
 # 🧠 LocalMind
 
 > **Privacy-first local AI desktop application** — Chat with local and cloud LLMs from a beautiful Electron + React interface, with full conversation history, streaming responses, multi-provider support, and a built-in knowledge base architecture.
