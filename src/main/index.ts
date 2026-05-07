@@ -83,8 +83,8 @@ function createWindow(): void {
   registerIpcHandlers(mainWindow)
 
   // Load renderer
-  if (typeof MAIN_WINDOW_VITE_DEV_SERVER_URL !== 'undefined' && MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
@@ -105,6 +105,3 @@ function registerGlobalShortcut(): void {
     closeDatabase()
   })
 }
-
-// Type declarations for electron-vite constants
-declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string

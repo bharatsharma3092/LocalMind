@@ -1,8 +1,17 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useConsensusStore } from '../../stores/consensusStore'
 import { useProviderStore, type ModelInfo } from '../../stores/providerStore'
+import { useSettingsStore } from '../../stores/settingsStore'
+import { useChatStore } from '../../stores/chatStore'
+import { PageNavIcons } from '../ui/PageNavIcons'
+import type { AppPage } from '../sidebar/Sidebar'
 
-export function ConsensusPage() {
+interface Props {
+  currentPage: AppPage
+  onNavigate: (page: AppPage) => void
+}
+
+export function ConsensusPage({ currentPage, onNavigate }: Props) {
   const {
     selectedModels,
     synthesizerModel,
@@ -18,18 +27,30 @@ export function ConsensusPage() {
     setCandidates,
     appendSynthesis,
     setStreamId,
+    setConversationId,
     reset,
   } = useConsensusStore()
 
   const { availableModels } = useProviderStore()
+  const { webSearchEnabled } = useSettingsStore()
+  const { createConversation, addMessage } = useChatStore()
+
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [showSynthPicker, setShowSynthPicker] = useState(false)
   const [activeTab, setActiveTab] = useState<'synthesis' | number>('synthesis')
   const [modelSearch, setModelSearch] = useState('')
   const [synthSearch, setSynthSearch] = useState('')
+  const [webSearchActive, setWebSearchActive] = useState(false)
+  const [searching, setSearching] = useState(false)
   const modelPickerRef = useRef<HTMLDivElement>(null)
   const synthPickerRef = useRef<HTMLDivElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
+
+  // Fresh session every time consensus page mounts
+  useEffect(() => {
+    reset()
+    setQuery('')
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -71,9 +92,50 @@ export function ConsensusPage() {
       }))
     )
 
+    // Create conversation for saving
+    let convId: string | null = null
+    try {
+      convId = await createConversation()
+      setConversationId(convId)
+      const modelNames = selectedModels.map((m) => m.name).join(', ')
+      await window.localmind.db.updateConversation(convId, {
+        title: `Consensus: ${query.trim().slice(0, 50)}${query.trim().length > 50 ? '...' : ''}`,
+      })
+      // Save user query as a message
+      await addMessage({
+        conversationId: convId,
+        role: 'user',
+        content: `[Consensus Query — Models: ${modelNames}]\n\n${query.trim()}`,
+      })
+    } catch (err) {
+      console.error('[ConsensusPage] Failed to create conversation:', err)
+    }
+
+    // Web search enrichment
+    let enrichedQuery = query.trim()
+    if (webSearchActive && webSearchEnabled) {
+      setSearching(true)
+      try {
+        if (window.localmind?.websearch?.search) {
+          const res = await window.localmind.websearch.search(query.trim())
+          const searchData = res.data ?? res
+          if (searchData.success && searchData.results && searchData.results.length > 0) {
+            const searchResults = searchData.results.map((r: any, i: number) =>
+              `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`
+            ).join('\n\n')
+            enrichedQuery = `Web search results for "${query.trim()}":\n\n${searchResults}\n\nUser question: ${query.trim()}`
+          }
+        }
+      } catch (err) {
+        console.error('[ConsensusPage] Web search failed:', err)
+      } finally {
+        setSearching(false)
+      }
+    }
+
     try {
       const res = await window.localmind.llm.consensus({
-        query: query.trim(),
+        query: enrichedQuery,
         models: selectedModels.map((m) => ({
           provider: m.provider,
           model: m.id,
@@ -93,9 +155,10 @@ export function ConsensusPage() {
       const streamId = res.data.streamId
       setStreamId(streamId)
 
+      let fullSynthesis = ''
+
       const chunkCleanup = window.localmind.llm.onChunk(streamId, (chunk) => {
         if (chunk.type === 'text' && chunk.content) {
-          // Check for candidates metadata
           const candidateMatch = chunk.content.match(/<!--CANDIDATES_JSON:(.*?)-->/)
           if (candidateMatch) {
             try {
@@ -110,24 +173,42 @@ export function ConsensusPage() {
                 }))
               )
             } catch { /* ignore parse errors */ }
-            // Strip the metadata from displayed content
             const cleaned = chunk.content.replace(/<!--CANDIDATES_JSON:.*?-->\n?\n?/, '')
-            if (cleaned) appendSynthesis(cleaned)
+            if (cleaned) {
+              appendSynthesis(cleaned)
+              fullSynthesis += cleaned
+            }
           } else {
             appendSynthesis(chunk.content)
+            fullSynthesis += chunk.content
           }
         }
       })
 
-      const doneCleanup = window.localmind.llm.onDone(streamId, () => {
+      const doneCleanup = window.localmind.llm.onDone(streamId, async () => {
         setRunning(false)
         chunkCleanup()
         doneCleanup()
         errorCleanup()
+
+        // Save synthesized answer to conversation
+        if (convId && fullSynthesis.trim()) {
+          try {
+            await addMessage({
+              conversationId: convId,
+              role: 'assistant',
+              content: fullSynthesis.trim(),
+            })
+          } catch (err) {
+            console.error('[ConsensusPage] Failed to save synthesis:', err)
+          }
+        }
       })
 
       const errorCleanup = window.localmind.llm.onError(streamId, (err) => {
-        appendSynthesis(`\n\n**Error:** ${err}`)
+        const errMsg = `\n\n**Error:** ${err}`
+        appendSynthesis(errMsg)
+        fullSynthesis += errMsg
         setRunning(false)
         chunkCleanup()
         doneCleanup()
@@ -139,24 +220,29 @@ export function ConsensusPage() {
       appendSynthesis(`**Error:** ${err?.message ?? 'Consensus failed'}`)
       setRunning(false)
     }
-  }, [query, selectedModels, synthesizerModel, reset, setRunning, setCandidates, appendSynthesis, setStreamId])
+  }, [query, selectedModels, synthesizerModel, reset, setRunning, setCandidates, appendSynthesis, setStreamId, setConversationId, createConversation, addMessage, webSearchActive, webSearchEnabled])
 
   const canRun = query.trim().length > 0 && selectedModels.length >= 2 && synthesizerModel !== null && !isRunning
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="px-6 py-4 border-b border-outline-variant flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-container/20">
-            <span className="material-symbols-outlined text-primary text-[24px]">groups</span>
+      {/* Header with nav icons */}
+      <header className="flex justify-between items-center w-full px-6 py-2 z-50 h-14 bg-surface-container-low/80 backdrop-blur-md border-b border-outline-variant shadow-sm">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary text-[22px]">groups</span>
+            <h1 className="text-[15px] font-bold text-on-surface">Consensus</h1>
           </div>
-          <div>
-            <h1 className="text-lg font-bold text-on-surface">Consensus Engine</h1>
-            <p className="text-[12px] text-on-surface-variant">Multi-model query with synthesis</p>
-          </div>
+          <PageNavIcons currentPage={currentPage} onNavigate={onNavigate} />
         </div>
-      </div>
+        <div className="flex items-center gap-2">
+          {isRunning && (
+            <span className="text-[11px] px-2 py-1 rounded-full bg-primary-container/20 text-primary font-semibold animate-pulse">
+              Running...
+            </span>
+          )}
+        </div>
+      </header>
 
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
         {/* Model Selection */}
@@ -284,7 +370,22 @@ export function ConsensusPage() {
 
         {/* Query Input */}
         <div className="space-y-3">
-          <label className="text-[13px] font-semibold text-on-surface">Query</label>
+          <div className="flex items-center justify-between">
+            <label className="text-[13px] font-semibold text-on-surface">Query</label>
+            <button
+              onClick={() => setWebSearchActive(!webSearchActive)}
+              disabled={!webSearchEnabled || searching}
+              className={`px-2 py-1 rounded-md text-[12px] font-semibold flex items-center gap-1 transition-colors ${
+                webSearchActive && webSearchEnabled
+                  ? 'bg-primary-container text-white border border-primary-container'
+                  : 'bg-secondary/10 text-secondary border border-secondary/20 hover:bg-secondary/20'
+              } disabled:opacity-40`}
+              title={!webSearchEnabled ? 'Enable web search in Settings' : ''}
+            >
+              <span className="material-symbols-outlined text-[14px]">{searching ? 'sync' : 'travel_explore'}</span>
+              {searching ? 'Searching...' : '@WebSearch'}
+            </button>
+          </div>
           <div className="relative">
             <textarea
               value={query}

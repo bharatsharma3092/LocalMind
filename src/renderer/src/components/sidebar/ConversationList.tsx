@@ -16,7 +16,11 @@ function getConversationDisplayName(conv: { title: string | null; id: string }, 
   return 'New Conversation'
 }
 
-export function ConversationList() {
+interface ConversationListProps {
+  onConversationClick?: () => void
+}
+
+export function ConversationList({ onConversationClick }: ConversationListProps = {}) {
   const { conversations, messages, activeConversationId, selectConversation, deleteConversation, loadConversations, searchConversations, toggleStarred } = useChatStore()
   const personas = usePersonaStore((state) => state.personas)
   const [searchQuery, setSearchQuery] = useState('')
@@ -50,7 +54,7 @@ export function ConversationList() {
     return (
       <div
         key={conv.id}
-        onClick={() => selectConversation(conv.id)}
+        onClick={() => { selectConversation(conv.id); onConversationClick?.() }}
         onContextMenu={(e) => {
           e.preventDefault()
           setContextMenu({ convId: conv.id, x: e.clientX, y: e.clientY })

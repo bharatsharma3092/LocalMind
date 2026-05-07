@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
+import { PageNavIcons } from '../ui/PageNavIcons'
+import type { AppPage } from '../sidebar/Sidebar'
 
 interface Skill {
   id: string
@@ -52,7 +54,12 @@ function getSkillIcon(icon?: string) {
   return materialIconAliases[icon] ?? icon
 }
 
-export function SkillsPage() {
+interface SkillsPageProps {
+  currentPage: AppPage
+  onNavigate: (page: AppPage) => void
+}
+
+export function SkillsPage({ currentPage, onNavigate }: SkillsPageProps) {
   const [skills, setSkills] = useState<Skill[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -124,7 +131,17 @@ export function SkillsPage() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 bg-surface">
+    <div className="flex-1 overflow-hidden flex flex-col bg-surface">
+      {/* Top bar with nav icons */}
+      <header className="flex items-center gap-4 px-6 h-14 border-b border-outline-variant bg-surface-container-low/80 backdrop-blur-md shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary text-[22px]">psychology</span>
+          <h1 className="text-[15px] font-bold text-on-surface">Skills</h1>
+        </div>
+        <PageNavIcons currentPage={currentPage} onNavigate={onNavigate} />
+      </header>
+
+      <div className="flex-1 overflow-y-auto p-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>
@@ -263,6 +280,7 @@ export function SkillsPage() {
           )}
         </div>
       )}
+      </div>
     </div>
   )
 }

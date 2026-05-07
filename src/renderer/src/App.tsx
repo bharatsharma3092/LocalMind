@@ -53,15 +53,19 @@ function App() {
         />
         <div className="flex-1 flex flex-col h-full overflow-hidden md:ml-[260px]">
           {currentPage === 'chat' && (
-            <ChatView onSettingsClick={(tab) => {
-              setSettingsTab(tab ?? 'general')
-              setCurrentPage('settings')
-            }} />
+            <ChatView
+              currentPage={currentPage}
+              onNavigate={handleNavigate}
+              onSettingsClick={(tab) => {
+                setSettingsTab(tab ?? 'general')
+                setCurrentPage('settings')
+              }}
+            />
           )}
-          {currentPage === 'mcp' && <McpManagementPage />}
-          {currentPage === 'skills' && <SkillsPage />}
-          {currentPage === 'agents' && <AgentsPage />}
-          {currentPage === 'consensus' && <ConsensusPage />}
+          {currentPage === 'mcp' && <McpManagementPage currentPage={currentPage} onNavigate={handleNavigate} />}
+          {currentPage === 'skills' && <SkillsPage currentPage={currentPage} onNavigate={handleNavigate} />}
+          {currentPage === 'agents' && <AgentsPage currentPage={currentPage} onNavigate={handleNavigate} />}
+          {currentPage === 'consensus' && <ConsensusPage currentPage={currentPage} onNavigate={handleNavigate} />}
           {currentPage === 'settings' && (
             <SettingsPage initialTab={settingsTab} />
           )}

@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
+import { PageNavIcons } from '../ui/PageNavIcons'
+import type { AppPage } from '../sidebar/Sidebar'
 
 interface ServerConfig {
   id?: string
@@ -259,7 +261,12 @@ function processCommand(command?: string) {
   return command
 }
 
-export function McpManagementPage() {
+interface McpPageProps {
+  currentPage: AppPage
+  onNavigate: (page: AppPage) => void
+}
+
+export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
   const [servers, setServers] = useState<ServerStatus[]>([])
   const [showAddForm, setShowAddForm] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -399,6 +406,15 @@ export function McpManagementPage() {
 
   return (
     <div className="flex-1 flex flex-col h-full bg-background overflow-hidden">
+      {/* Top bar with nav icons */}
+      <div className="flex items-center gap-4 px-6 h-14 border-b border-outline-variant bg-surface-container-low/80 backdrop-blur-md shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary text-[22px]">hub</span>
+          <h1 className="text-[15px] font-bold text-on-surface">MCP Servers</h1>
+        </div>
+        <PageNavIcons currentPage={currentPage} onNavigate={onNavigate} />
+      </div>
+
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto p-8">
         <div className="w-full max-w-7xl mx-auto">
@@ -406,7 +422,6 @@ export function McpManagementPage() {
           <header className="mb-10">
             <div className="flex justify-between items-end">
               <div>
-                <h1 className="font-h1 text-h1 text-on-surface mb-2">MCP Management</h1>
                 <p className="font-body-lg text-body-lg text-on-surface-variant">
                   Connect and manage Model Context Protocol servers to extend LocalMind's capabilities.
                 </p>

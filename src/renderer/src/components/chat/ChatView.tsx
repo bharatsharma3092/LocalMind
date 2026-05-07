@@ -4,9 +4,13 @@ import { ChatInput } from './ChatInput'
 import { ModelSelector } from './ModelSelector'
 import { ContextBar } from './ContextBar'
 import { PersonaPicker } from '../personas/PersonaPicker'
+import { PageNavIcons } from '../ui/PageNavIcons'
 import { useChatStore } from '../../stores/chatStore'
+import type { AppPage } from '../sidebar/Sidebar'
 
 interface Props {
+  currentPage: AppPage
+  onNavigate: (page: AppPage) => void
   onSettingsClick: (tab?: 'general' | 'profile' | 'memory' | 'models' | 'mcp' | 'personas' | 'data') => void
 }
 
@@ -14,7 +18,7 @@ const topNavTabs = [
   { id: 'chat', label: 'Chat', active: true },
 ]
 
-export function ChatView({ onSettingsClick }: Props) {
+export function ChatView({ currentPage, onNavigate, onSettingsClick }: Props) {
   const { activeConversationId, conversations } = useChatStore()
   const [displayName, setDisplayName] = useState('')
 
@@ -59,6 +63,8 @@ export function ChatView({ onSettingsClick }: Props) {
               </a>
             ))}
           </nav>
+          {/* Page Nav Icons */}
+          <PageNavIcons currentPage={currentPage} onNavigate={onNavigate} />
         </div>
 
         {/* Right: Actions */}

@@ -13,24 +13,6 @@ interface Props {
   onSettingsClick: () => void
 }
 
-type NavItem = {
-  id: AppPage
-  label: string
-  icon: string
-}
-
-const mainNav: NavItem[] = [
-  { id: 'chat', label: 'Conversations', icon: 'forum' },
-  { id: 'consensus', label: 'Consensus', icon: 'groups' },
-  { id: 'agents', label: 'Agents', icon: 'smart_toy' },
-  { id: 'skills', label: 'Skills', icon: 'psychology' },
-  { id: 'mcp', label: 'MCP Servers', icon: 'hub' },
-]
-
-const footerNav = [
-  { id: 'settings' as AppPage, label: 'Settings', icon: 'settings' },
-]
-
 export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
   const { createConversation } = useChatStore()
   const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
@@ -65,9 +47,9 @@ export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
       </div>
 
       {/* CTA */}
-      <div className="px-4 mb-6">
+      <div className="px-4 mb-4">
         <button
-          onClick={() => createConversation({ personaId: draftPersonaId })}
+          onClick={() => { createConversation({ personaId: draftPersonaId }); onNavigate('chat') }}
           className="w-full bg-primary-container text-white hover:bg-accent-hover transition-colors duration-200 py-3 rounded-lg flex items-center justify-center gap-2 font-semibold text-[14px] shadow-sm"
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
@@ -75,38 +57,12 @@ export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
         </button>
       </div>
 
-      {/* Main Tabs */}
-      <div className="px-2 space-y-1">
-        {mainNav.map((item) => {
-          const isActive = currentPage === item.id
-          return (
-            <button
-              key={item.id}
-              onClick={() => onNavigate(item.id)}
-              className={`w-full flex items-center py-3 px-4 text-[12px] uppercase tracking-widest font-bold transition-all duration-200 hover:translate-x-1 ${
-                isActive
-                  ? 'text-accent bg-accent/10 border-l-4 border-primary-container'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high/40 border-l-4 border-transparent'
-              }`}
-            >
-              <span className="material-symbols-outlined mr-3 text-[20px]">{item.icon}</span>
-              {item.label}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Conversation list when Chat tab is active */}
-      {currentPage === 'chat' && (
-        <div className="flex-1 min-h-0 overflow-hidden mt-2 px-2">
-          <div className="h-full overflow-y-auto">
-            <ConversationList />
-          </div>
+      {/* Conversation list — always visible */}
+      <div className="flex-1 min-h-0 overflow-hidden px-2">
+        <div className="h-full overflow-y-auto">
+          <ConversationList onConversationClick={() => onNavigate('chat')} />
         </div>
-      )}
-
-      {/* Spacer for other tabs */}
-      {currentPage !== 'chat' && <div className="flex-1" />}
+      </div>
 
       {/* Footer Tabs */}
       <div className="mt-auto px-2 space-y-1 pt-4 border-t border-outline-variant/50">

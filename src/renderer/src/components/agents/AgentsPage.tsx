@@ -4,6 +4,8 @@ import type { Agent } from '@shared/types/localmind-api'
 import { useChatStore } from '../../stores/chatStore'
 import { MessageList } from '../chat/MessageList'
 import { ChatInput } from '../chat/ChatInput'
+import { PageNavIcons } from '../ui/PageNavIcons'
+import type { AppPage } from '../sidebar/Sidebar'
 
 const fallbackAgents: Agent[] = [
   {
@@ -52,7 +54,12 @@ const agentPowers: Record<string, string[]> = {
 
 const EMPTY_MESSAGES: never[] = []
 
-export function AgentsPage() {
+interface Props {
+  currentPage: AppPage
+  onNavigate: (page: AppPage) => void
+}
+
+export function AgentsPage({ currentPage, onNavigate }: Props) {
   const [agents, setAgents] = useState<Agent[]>(fallbackAgents)
   const [selectedAgentId, setSelectedAgentId] = useState('cowork')
   const [agentConversationIds, setAgentConversationIds] = useState<Record<string, string>>({})
@@ -180,15 +187,13 @@ export function AgentsPage() {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex h-16 items-center justify-between border-b border-outline-variant bg-surface-container-low/80 px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-high text-primary">
-              <span className="material-symbols-outlined">{selectedAgent?.icon ?? 'smart_toy'}</span>
+        <header className="flex h-14 items-center justify-between border-b border-outline-variant bg-surface-container-low/80 backdrop-blur-md px-6">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary text-[22px]">{selectedAgent?.icon ?? 'smart_toy'}</span>
+              <h1 className="text-[15px] font-bold text-on-surface">{selectedAgent?.name}</h1>
             </div>
-            <div>
-              <h1 className="text-lg font-black text-on-surface">{selectedAgent?.name}</h1>
-              <p className="text-xs text-on-surface-variant">{selectedAgent?.category}</p>
-            </div>
+            <PageNavIcons currentPage={currentPage} onNavigate={onNavigate} />
           </div>
           <button
             onClick={fetchAgents}

@@ -17,6 +17,7 @@ interface ConsensusStore {
   synthesizedAnswer: string
   streamId: string | null
   query: string
+  conversationId: string | null
 
   addModel: (model: ModelInfo) => void
   removeModel: (modelId: string) => void
@@ -26,6 +27,7 @@ interface ConsensusStore {
   setCandidates: (candidates: CandidateResponse[]) => void
   appendSynthesis: (text: string) => void
   setStreamId: (id: string | null) => void
+  setConversationId: (id: string | null) => void
   reset: () => void
 }
 
@@ -37,6 +39,7 @@ export const useConsensusStore = create<ConsensusStore>((set) => ({
   synthesizedAnswer: '',
   streamId: null,
   query: '',
+  conversationId: null,
 
   addModel: (model) =>
     set((s) => {
@@ -63,11 +66,14 @@ export const useConsensusStore = create<ConsensusStore>((set) => ({
 
   setStreamId: (id) => set({ streamId: id }),
 
+  setConversationId: (id) => set({ conversationId: id }),
+
   reset: () =>
     set({
       isRunning: false,
       candidateResponses: [],
       synthesizedAnswer: '',
       streamId: null,
+      conversationId: null,
     }),
 }))
