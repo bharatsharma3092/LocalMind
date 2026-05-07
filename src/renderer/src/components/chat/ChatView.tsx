@@ -3,7 +3,6 @@ import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ModelSelector } from './ModelSelector'
 import { ContextBar } from './ContextBar'
-import { PersonaPicker } from '../personas/PersonaPicker'
 import { PageNavIcons } from '../ui/PageNavIcons'
 import { useChatStore } from '../../stores/chatStore'
 import type { AppPage } from '../sidebar/Sidebar'
@@ -19,10 +18,9 @@ const topNavTabs = [
 ]
 
 export function ChatView({ currentPage, onNavigate, onSettingsClick }: Props) {
-  const { activeConversationId, conversations } = useChatStore()
+  const { activeConversationId } = useChatStore()
   const [displayName, setDisplayName] = useState('')
 
-  const activeConversation = conversations.find((c) => c.id === activeConversationId)
   const hasActiveConv = !!activeConversationId
 
   useEffect(() => {
@@ -43,10 +41,6 @@ export function ChatView({ currentPage, onNavigate, onSettingsClick }: Props) {
           </button>
           {/* Model Selector */}
           <ModelSelector />
-          <PersonaPicker
-            conversationId={activeConversationId}
-            onManagePersonas={() => onSettingsClick('personas')}
-          />
           {/* Navigation Links */}
           <nav className="hidden lg:flex items-center gap-1">
             {topNavTabs.map((tab) => (
@@ -82,10 +76,6 @@ export function ChatView({ currentPage, onNavigate, onSettingsClick }: Props) {
               className="w-9 h-9 flex items-center justify-center rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition-colors duration-200 cursor-pointer active:scale-95"
             >
               <span className="material-symbols-outlined text-[20px]">settings</span>
-            </button>
-            <button className="w-9 h-9 flex items-center justify-center rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition-colors duration-200 cursor-pointer active:scale-95 relative">
-              <span className="material-symbols-outlined text-[20px]">notifications</span>
-              <span className="absolute top-2 right-2 w-2 h-2 bg-primary-container rounded-full"></span>
             </button>
           </div>
           {/* Text Actions */}
@@ -128,9 +118,6 @@ export function ChatView({ currentPage, onNavigate, onSettingsClick }: Props) {
                 <p className="text-sm text-on-surface-variant/80">Privacy-first AI assistant with MCP support</p>
               </div>
               <div className="w-full max-w-3xl">
-                <div className="mb-4 flex justify-center">
-                  <PersonaPicker onManagePersonas={() => onSettingsClick('personas')} />
-                </div>
                 <ChatInput
                   conversationId={activeConversationId ?? ''}
                   disabled={false}
