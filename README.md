@@ -225,19 +225,11 @@ The backend IPC handlers for these features are fully implemented — UI integra
 
 | Priority | Feature | Status |
 |---|---|---|
-| 🔴 P0 | MCP Server Manager (connect, disconnect, tool approval) | Backend ready, UI pending |
-| 🟠 P1 | File Upload & URL Fetch in Chat | Backend ready, UI pending |
-| 🟠 P1 | RAG Document Knowledge Base UI | Backend ready, UI pending |
-| 🟡 P2 | Personas (system prompt templates) | Backend ready, UI pending |
 | 🟡 P2 | Workspaces (multi-project context) | Backend ready, UI pending |
 | 🟡 P2 | Artifacts Panel (save & version code snippets) | Backend ready, UI pending |
-| 🟢 P3 | Skills UI (custom step-based AI actions) | Backend ready, UI pending |
-| 🟢 P3 | Data Export / Import (ZIP, Markdown, PDF) | Backend ready, UI pending |
 | 🟢 P3 | Conversation Starring / Pinning | Backend ready, UI pending |
 | 🔵 P4 | Message Branching (regenerate from any point) | Backend ready, UI pending |
 | 🔵 P4 | Model Profiles (named temperature/token configs) | Schema ready, UI pending |
-| 🔵 P4 | Custom Global Shortcut Configuration | Backend ready, UI pending |
-| ⚫ P5 | Skill Pipelines Builder (chain skills) | Planned |
 
 ---
 
