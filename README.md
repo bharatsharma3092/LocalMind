@@ -136,13 +136,6 @@ Save, version, and export code/text artifacts generated during conversations:
 - **Import all** — Restore from a previously exported ZIP
 - **Export conversation** — Save individual conversations as PDF or Markdown
 
-### Claude Code Proxy
-
-Built-in proxy server for Claude Code CLI integration:
-
-- Configure proxy roles (Opus, Sonnet, Haiku)
-- Start/stop the proxy from Settings
-- Routes Claude Code requests through your configured providers
 
 ### UI & Customization
 
