@@ -101,6 +101,17 @@ Augment LLM responses with live web results:
 - Also available in Consensus Engine for research-grade queries
 - Results are prepended to your prompt as context
 
+### Claude Code Proxy
+
+OpenAI-compatible proxy server for Claude Code integration:
+
+- **LiteLLM-powered** — Routes Claude Code requests to any LocalMind provider (Ollama, OpenAI, OpenRouter, Google, Custom)
+- **Model mapping** — Map Claude's Opus/Sonnet/Haiku to your preferred models
+- **Auto-sync** — Automatically updates Claude Code settings.json with proxy configuration
+- **Request sanitization** — Strips Anthropic-specific fields for compatibility with non-Anthropic providers
+- **One-click start/stop** — Manage proxy server from Settings
+- **Custom port & API key** — Configure port (default 4000) and authentication
+
 ### Privacy Mode
 
 - Toggle to block ALL cloud providers instantly — only Ollama (local) is allowed
@@ -250,6 +261,15 @@ Creates a distributable installer in `dist/`.
 4. (Optional) Enable web search
 5. Type your query and click "Run Consensus"
 
+### Setting Up Claude Code Proxy
+
+1. Install LiteLLM: `pip install litellm`
+2. Go to Settings → Claude Code Proxy
+3. Select models for Opus, Sonnet, and Haiku roles
+4. Configure port (default 4000) and API key
+5. Click "Start Proxy"
+6. Claude Code will automatically use LocalMind models via the proxy
+
 ---
 
 ## Testing
@@ -319,7 +339,8 @@ LocalMind/
 │   │   ├── artifacts/          # Artifact save/version/export
 │   │   ├── files/              # File extractor + URL fetcher
 │   │   ├── data/               # Full data export/import (ZIP)
-│   │   ├── claude-code/        # Claude Code proxy server
+│   │   ├── claude-code/
+│   │   │   └── proxy.ts        # LiteLLM proxy server for Claude Code integration
 │   │   └── settings/
 │   │       ├── app-store.ts    # electron-store for app settings
 │   │       └── secrets.ts      # Encrypted API key storage
