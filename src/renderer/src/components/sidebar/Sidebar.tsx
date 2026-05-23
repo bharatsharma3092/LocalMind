@@ -1,9 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { ConversationList } from './ConversationList'
 import { useChatStore } from '../../stores/chatStore'
 import { usePersonaStore } from '../../stores/personaStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useRagStore } from '../../stores/ragStore'
+import { useSettingsStore } from '../../stores/settingsStore'
+import { LocalMindLogo } from '../branding/LocalMindLogo'
 
 export type AppPage = 'chat' | 'mcp' | 'skills' | 'agents' | 'consensus' | 'settings'
 
@@ -14,10 +16,12 @@ interface Props {
 }
 
 export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
-  const { createConversation } = useChatStore()
+  const { createConversation, clearActiveConversation } = useChatStore()
   const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
+  const theme = useSettingsStore((state) => state.theme)
   const { loadWorkspaces } = useWorkspaceStore()
   const { loadDocuments, loadStatus } = useRagStore()
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true)
 
   useEffect(() => {
     loadWorkspaces()
@@ -25,26 +29,33 @@ export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
     loadStatus()
   }, [loadWorkspaces, loadDocuments, loadStatus])
 
+  useEffect(() => {
+    const query = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!query) return
+    const handleChange = () => setSystemPrefersDark(query.matches)
+    handleChange()
+    query.addEventListener('change', handleChange)
+    return () => query.removeEventListener('change', handleChange)
+  }, [])
+
+  const logoVariant = theme === 'light' || (theme === 'system' && !systemPrefersDark) ? 'light' : 'dark'
+  const goHome = () => {
+    clearActiveConversation()
+    onNavigate('chat')
+  }
+
   return (
     <nav className="fixed left-0 top-0 h-full w-[260px] border-r border-outline-variant bg-surface-container-lowest flex flex-col py-4 z-40 hidden md:flex">
       {/* Header */}
-      <div className="px-6 mb-8 flex items-center gap-3">
-        <div className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-primary-container/30 bg-surface-container text-primary shadow-sm">
-          <span
-            className="material-symbols-outlined font-black text-[22px]"
-            style={{ fontVariationSettings: "'FILL' 1" }}
-          >
-            memory
-          </span>
-          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary-container text-[10px] text-white">
-            <span className="material-symbols-outlined text-[12px]">lock</span>
-          </span>
-        </div>
-        <div>
-          <h1 className="text-primary-container font-black text-[20px] tracking-tight leading-tight">LocalMind</h1>
-          <p className="text-[12px] text-on-surface-variant uppercase tracking-wider font-semibold leading-none mt-0.5">Privacy First AI</p>
-        </div>
-      </div>
+      <button
+        type="button"
+        onClick={goHome}
+        className="mx-5 mb-8 h-[68px] cursor-pointer rounded-lg text-left transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        aria-label="Go to LocalMind home"
+        title="Home"
+      >
+        <LocalMindLogo variant={logoVariant} />
+      </button>
 
       {/* CTA */}
       <div className="px-4 mb-4">

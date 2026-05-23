@@ -84,6 +84,8 @@ export function SettingsPage({
   const [claudeProxy, setClaudeProxy] = useState<any>({ enabled: false, port: 4000, apiKey: 'localmind-proxy-key' })
   const [claudeProxyStatus, setClaudeProxyStatus] = useState<any>(null)
   const [savingClaudeProxy, setSavingClaudeProxy] = useState(false)
+  const [testingClaudeProxy, setTestingClaudeProxy] = useState(false)
+  const [claudeProxyTestResults, setClaudeProxyTestResults] = useState<any[]>([])
 
   useEffect(() => {
     window.localmind.settings.get('ollamaUrl').then((r) => {
@@ -413,6 +415,25 @@ export function SettingsPage({
       }
     } finally {
       setSavingClaudeProxy(false)
+    }
+  }
+
+  const testClaudeProxyModels = async () => {
+    setTestingClaudeProxy(true)
+    try {
+      const saved = await window.localmind.claudeProxy.saveSettings(claudeProxy)
+      const settings = saved.success && saved.data ? saved.data : claudeProxy
+      if (saved.success && saved.data) setClaudeProxy(saved.data)
+      const tests = await window.localmind.claudeProxy.testModels(settings)
+      const status = await window.localmind.claudeProxy.status()
+      if (status.success) setClaudeProxyStatus(status.data)
+      setClaudeProxyTestResults(tests.success && Array.isArray(tests.data) ? tests.data : [{
+        role: 'proxy',
+        ok: false,
+        error: tests.error ?? 'Unable to test selected models.',
+      }])
+    } finally {
+      setTestingClaudeProxy(false)
     }
   }
 
@@ -1136,6 +1157,13 @@ export function SettingsPage({
                     Start Proxy
                   </button>
                   <button
+                    onClick={testClaudeProxyModels}
+                    disabled={testingClaudeProxy || savingClaudeProxy}
+                    className="rounded-lg border border-outline-variant px-4 py-2 text-sm font-semibold text-on-surface-variant hover:text-on-surface disabled:opacity-50"
+                  >
+                    {testingClaudeProxy ? 'Testing...' : 'Test Models'}
+                  </button>
+                  <button
                     onClick={stopClaudeProxy}
                     className="rounded-lg border border-outline-variant px-4 py-2 text-sm font-semibold text-on-surface-variant hover:text-on-surface"
                   >
@@ -1152,6 +1180,24 @@ export function SettingsPage({
                 </div>
                 {claudeProxyStatus?.output && (
                   <pre className="mt-3 max-h-40 overflow-auto rounded-lg bg-surface-container px-3 py-2 text-xs text-on-surface-variant">{claudeProxyStatus.output}</pre>
+                )}
+                {claudeProxyTestResults.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {claudeProxyTestResults.map((result) => (
+                      <div
+                        key={`${result.role}-${result.model ?? 'none'}`}
+                        className={`rounded-lg border px-3 py-2 text-xs leading-5 ${
+                          result.ok
+                            ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-500'
+                            : 'border-error/30 bg-error/10 text-error'
+                        }`}
+                      >
+                        <span className="font-bold capitalize">{result.role}</span>
+                        {result.model && <span className="ml-2 font-mono">{result.model}</span>}
+                        <span className="ml-2">{result.ok ? 'OK' : result.error}</span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </section>

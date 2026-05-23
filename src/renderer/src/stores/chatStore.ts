@@ -52,6 +52,7 @@ interface ChatStore {
   finalizeStreamingMessage: (convId: string, messageId: string) => void
   deleteConversation: (id: string) => Promise<void>
   searchConversations: (query: string) => Promise<void>
+  clearActiveConversation: () => void
   setStreaming: (streaming: boolean) => void
   updateConversationTitle: (convId: string, title: string) => void
   updateConversationPersona: (convId: string, personaId: string | null) => Promise<void>
@@ -290,6 +291,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } else {
       log.error('searchConversations', 'Search failed', res)
     }
+  },
+
+  clearActiveConversation: () => {
+    log.info('clearActiveConversation', 'Returning to chat home')
+    set({ activeConversationId: null })
   },
 
   // -------------------------------------------------------------------------

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 150" role="img" aria-labelledby="title desc">
+  <title id="title">LocalMind</title>
+  <desc id="desc">LocalMind privacy first AI logo for dark mode.</desc>
+  <defs>
+    <linearGradient id="darkWordmark" x1="150" y1="30" x2="600" y2="115" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#f3f0eb"/>
+      <stop offset="1" stop-color="#d5cec4"/>
+    </linearGradient>
+    <linearGradient id="goldLine" x1="30" y1="25" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffc65a"/>
+      <stop offset="1" stop-color="#f39a13"/>
+    </linearGradient>
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.6" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 1 0 0.55 0 0 0.55 0 0 0.1 0 0 0 0 0 0.55 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="14" y="14" width="122" height="122" rx="34" fill="#12100d" stroke="#403a34" stroke-width="1.8"/>
+  <g fill="none" stroke="url(#goldLine)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#softGlow)">
+    <path d="M68 38 48 50 38 75 39 100 52 121 68 128"/>
+    <path d="M68 38 83 50 96 66"/>
+    <path d="M48 50 66 66 83 72"/>
+    <path d="M38 75 57 88 76 101"/>
+    <path d="M52 121 68 104 76 101"/>
+    <path d="M84 38 103 47 119 66 123 88 116 110 100 122 84 128"/>
+    <path d="M84 38 80 63 92 80 112 88 123 88"/>
+    <path d="M80 63 98 55 119 66"/>
+    <path d="M92 80 78 99 84 128"/>
+    <path d="M78 99 99 98 116 110"/>
+    <path d="M76 37 76 118"/>
+    <path d="M84 37 84 118"/>
+  </g>
+  <g fill="url(#goldLine)" filter="url(#softGlow)">
+    <circle cx="68" cy="38" r="9"/>
+    <circle cx="48" cy="50" r="7"/>
+    <circle cx="38" cy="75" r="9"/>
+    <circle cx="52" cy="121" r="7"/>
+    <circle cx="68" cy="128" r="9"/>
+    <circle cx="83" cy="72" r="8"/>
+    <circle cx="76" cy="101" r="9"/>
+    <circle cx="84" cy="38" r="9"/>
+    <circle cx="103" cy="47" r="7"/>
+    <circle cx="119" cy="66" r="8"/>
+    <circle cx="123" cy="88" r="7"/>
+    <circle cx="116" cy="110" r="7"/>
+    <circle cx="100" cy="122" r="8"/>
+    <circle cx="84" cy="128" r="9"/>
+    <circle cx="80" cy="63" r="9"/>
+    <circle cx="92" cy="80" r="8"/>
+    <circle cx="78" cy="99" r="8"/>
+  </g>
+  <text x="162" y="82" fill="url(#darkWordmark)" font-family="Manrope, Segoe UI, Arial, sans-serif" font-size="60" font-weight="900">LocalMind</text>
+  <text x="166" y="120" fill="#f5a623" font-family="Manrope, Segoe UI, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="9">PRIVACY FIRST AI</text>
+</svg>

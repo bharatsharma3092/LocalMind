@@ -177,6 +177,7 @@ contextBridge.exposeInMainWorld('localmind', {
   claudeProxy: {
     getSettings: () => ipcRenderer.invoke('claudeProxy:getSettings'),
     saveSettings: (settings: any) => ipcRenderer.invoke('claudeProxy:saveSettings', settings),
+    testModels: (settings: any) => ipcRenderer.invoke('claudeProxy:testModels', settings),
     start: () => ipcRenderer.invoke('claudeProxy:start'),
     stop: () => ipcRenderer.invoke('claudeProxy:stop'),
     status: () => ipcRenderer.invoke('claudeProxy:status'),

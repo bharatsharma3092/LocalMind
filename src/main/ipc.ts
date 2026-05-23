@@ -712,12 +712,84 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return await saveClaudeCodeProxySettings(settings)
   }))
 
+  ipcMain.handle('claudeProxy:testModels', safeHandle(async (_, settings: any) => {
+    const savedSettings = await saveClaudeCodeProxySettings(settings)
+    const status = await startClaudeCodeProxy()
+    const baseUrl = status.baseUrl ?? savedSettings.baseUrl
+    const apiKey = savedSettings.apiKey ?? 'localmind-proxy-key'
+    const roles = [
+      ['opus', savedSettings?.opusModel],
+      ['sonnet', savedSettings?.sonnetModel],
+      ['haiku', savedSettings?.haikuModel],
+    ] as const
+
+    const results = []
+    for (const [role, model] of roles) {
+      if (!model?.id || !model?.provider) {
+        results.push({ role, ok: false, model: null, error: 'No model selected.' })
+        continue
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}/v1/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01',
+            'anthropic-beta': 'prompt-caching-2024-07-31',
+            'x-api-key': apiKey,
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: model.id,
+            max_tokens: 16,
+            stream: false,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Reply with only: ok',
+                    cache_control: { type: 'ephemeral' },
+                  },
+                ],
+              },
+            ],
+          }),
+        })
+        const raw = await response.text()
+        if (!response.ok) {
+          throw new Error(raw || `Proxy test failed with HTTP ${response.status}`)
+        }
+        let content = raw
+        try {
+          const data = JSON.parse(raw)
+          content = (data.content ?? [])
+            .map((item: any) => item?.text ?? '')
+            .join('')
+            .trim()
+        } catch {}
+        results.push({ role, ok: true, model: model.id, provider: model.provider, content })
+      } catch (err: any) {
+        results.push({
+          role,
+          ok: false,
+          model: model.id,
+          provider: model.provider,
+          error: err?.message ?? 'Model test failed',
+        })
+      }
+    }
+    return results
+  }))
+
   ipcMain.handle('claudeProxy:start', safeHandle(async () => {
     return await startClaudeCodeProxy()
   }))
 
   ipcMain.handle('claudeProxy:stop', safeHandle(async () => {
-    return stopClaudeCodeProxy()
+    return await stopClaudeCodeProxy()
   }))
 
   ipcMain.handle('claudeProxy:status', safeHandle(async () => {

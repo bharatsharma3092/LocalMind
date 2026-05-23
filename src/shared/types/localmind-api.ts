@@ -260,6 +260,7 @@ export interface WebSearchApi {
 export interface ClaudeProxyApi {
   getSettings: () => Promise<IPCResponse<any>>
   saveSettings: (settings: any) => Promise<IPCResponse<any>>
+  testModels: (settings: any) => Promise<IPCResponse<any[]>>
   start: () => Promise<IPCResponse<any>>
   stop: () => Promise<IPCResponse<any>>
   status: () => Promise<IPCResponse<any>>

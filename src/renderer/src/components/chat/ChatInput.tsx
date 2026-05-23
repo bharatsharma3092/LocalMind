@@ -395,7 +395,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
 
         {/* Skill Launcher */}
         {showSkillLauncher && (
-          <div className="absolute left-1/2 bottom-full z-50 mb-3 w-[min(720px,calc(100vw-2rem))] -translate-x-1/2">
+          <div className="absolute left-1/2 bottom-full z-50 mb-3 w-[calc(100vw-2rem)] max-w-[720px] -translate-x-1/2">
             <SkillLauncher
               onSelect={(skill) => {
                 setInput(`[${skill.name}] `)
@@ -415,7 +415,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
         )}
 
         {showSkillCreator && (
-          <div className="absolute left-1/2 bottom-full z-50 mb-3 w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-outline-variant bg-surface-container-low p-4 shadow-2xl">
+          <div className="absolute left-1/2 bottom-full z-50 mb-3 w-[calc(100vw-2rem)] max-w-[620px] -translate-x-1/2 rounded-2xl border border-outline-variant bg-surface-container-low p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between">
               <div>
                 <p className="text-sm font-bold text-on-surface">Create Skill</p>
