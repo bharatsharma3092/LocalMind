@@ -147,15 +147,20 @@ export class OpenAIProvider implements LLMProvider {
       })
       if (!response.ok) return []
       const data = await response.json()
+      const premiumModelRegex = /^(gpt-4o|gpt-4\.5|gpt-[5-9]|o[1-9])/i
+      const snapshotRegex = /-\d{4}-\d{2}-\d{2}$/
       return (data.data ?? [])
-        .filter((m: any) => m.id.includes('gpt'))
+        .filter((m: any) => {
+          const id = m.id
+          return premiumModelRegex.test(id) && !snapshotRegex.test(id)
+        })
         .map((m: any) => ({
           id: m.id,
           name: m.id,
           provider: 'openai' as const,
-          contextWindow: m.id.includes('gpt-4') ? 128000 : 16384,
+          contextWindow: 128000,
           costPer1MTokens: { input: 10, output: 30 },
-          supportsVision: m.id.includes('vision') || m.id.includes('gpt-4o'),
+          supportsVision: true,
           supportsToolUse: true,
         }))
     } catch {

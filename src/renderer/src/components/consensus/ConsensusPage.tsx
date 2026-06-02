@@ -15,16 +15,21 @@ export function ConsensusPage({ currentPage, onNavigate }: Props) {
   const {
     selectedModels,
     synthesizerModel,
+    debateRounds,
     isRunning,
     candidateResponses,
+    debateRecords,
+    moderatorBriefs,
     synthesizedAnswer,
     query,
     addModel,
     removeModel,
     setSynthesizer,
+    setDebateRounds,
     setQuery,
     setRunning,
     setCandidates,
+    setDebateState,
     appendSynthesis,
     setStreamId,
     setConversationId,
@@ -37,7 +42,6 @@ export function ConsensusPage({ currentPage, onNavigate }: Props) {
 
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [showSynthPicker, setShowSynthPicker] = useState(false)
-  const [activeTab, setActiveTab] = useState<'synthesis' | number>('synthesis')
   const [modelSearch, setModelSearch] = useState('')
   const [synthSearch, setSynthSearch] = useState('')
   const [webSearchActive, setWebSearchActive] = useState(false)
@@ -146,6 +150,7 @@ export function ConsensusPage({ currentPage, onNavigate }: Props) {
           model: synthesizerModel.id,
           customProviderId: synthesizerModel.customProviderId,
         },
+        debateRounds,
       })
 
       if (!res.success || !res.data?.streamId) {
@@ -159,6 +164,23 @@ export function ConsensusPage({ currentPage, onNavigate }: Props) {
 
       const chunkCleanup = window.localmind.llm.onChunk(streamId, (chunk) => {
         if (chunk.type === 'text' && chunk.content) {
+          const debateMatch = chunk.content.match(/<!--CONSENSUS_DEBATE_JSON:(.*?)-->/)
+          if (debateMatch) {
+            try {
+              const debateState = JSON.parse(debateMatch[1])
+              setDebateState({
+                records: debateState.records,
+                moderatorBriefs: debateState.moderatorBriefs,
+              })
+            } catch { /* ignore parse errors */ }
+            const cleaned = chunk.content.replace(/<!--CONSENSUS_DEBATE_JSON:.*?-->\n?/, '')
+            if (cleaned) {
+              appendSynthesis(cleaned)
+              fullSynthesis += cleaned
+            }
+            return
+          }
+
           const candidateMatch = chunk.content.match(/<!--CANDIDATES_JSON:(.*?)-->/)
           if (candidateMatch) {
             try {
@@ -220,7 +242,7 @@ export function ConsensusPage({ currentPage, onNavigate }: Props) {
       appendSynthesis(`**Error:** ${err?.message ?? 'Consensus failed'}`)
       setRunning(false)
     }
-  }, [query, selectedModels, synthesizerModel, reset, setRunning, setCandidates, appendSynthesis, setStreamId, setConversationId, createConversation, addMessage, webSearchActive, webSearchEnabled])
+  }, [query, selectedModels, synthesizerModel, debateRounds, reset, setRunning, setCandidates, setDebateState, appendSynthesis, setStreamId, setConversationId, createConversation, addMessage, webSearchActive, webSearchEnabled])
 
   const canRun = query.trim().length > 0 && selectedModels.length >= 2 && synthesizerModel !== null && !isRunning
 
@@ -365,6 +387,31 @@ export function ConsensusPage({ currentPage, onNavigate }: Props) {
           </div>
         </div>
 
+        {/* Debate Controls */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="text-[13px] font-semibold text-on-surface">Debate Rounds</label>
+            <span className="text-[11px] text-on-surface-variant">Maximum 3</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {[1, 2, 3].map((round) => (
+              <button
+                key={round}
+                type="button"
+                onClick={() => setDebateRounds(round)}
+                disabled={isRunning}
+                className={`h-9 w-12 rounded-lg border text-[13px] font-bold transition-colors disabled:opacity-50 ${
+                  debateRounds === round
+                    ? 'border-primary-container bg-primary-container text-white'
+                    : 'border-outline-variant bg-surface-container text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
+                }`}
+              >
+                {round}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Divider */}
         <div className="border-t border-outline-variant/50"></div>
 
@@ -409,62 +456,111 @@ export function ConsensusPage({ currentPage, onNavigate }: Props) {
         </div>
 
         {/* Results */}
-        {(candidateResponses.length > 0 || synthesizedAnswer) && (
+        {(debateRecords.length > 0 || candidateResponses.length > 0 || synthesizedAnswer) && (
           <div className="space-y-4" ref={resultsRef}>
             <div className="border-t border-outline-variant/50"></div>
 
-            {/* Model Response Tabs */}
-            {candidateResponses.length > 0 && (
+            {/* Debate Table */}
+            {(debateRecords.length > 0 || candidateResponses.length > 0) && (
               <div className="space-y-3">
-                <label className="text-[13px] font-semibold text-on-surface">Model Responses</label>
-                <div className="flex gap-1 flex-wrap">
-                  <button
-                    onClick={() => setActiveTab('synthesis')}
-                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
-                      activeTab === 'synthesis'
-                        ? 'bg-primary-container text-white'
-                        : 'bg-surface-container text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
-                    }`}
-                  >
-                    Synthesis
-                  </button>
-                  {candidateResponses.map((c, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setActiveTab(i)}
-                      className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1.5 ${
-                        activeTab === i
-                          ? 'bg-secondary text-on-secondary'
-                          : 'bg-surface-container text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${
-                        c.status === 'done' ? 'bg-green-500' :
-                        c.status === 'error' ? 'bg-red-500' :
-                        'bg-amber-500 animate-pulse'
-                      }`}></span>
-                      {c.model.split('/').pop()?.split(':')[0] ?? c.model}
-                    </button>
-                  ))}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-primary text-[18px]">forum</span>
+                    <label className="text-[13px] font-semibold text-on-surface">Debate Board</label>
+                  </div>
+                  <span className="text-[11px] text-on-surface-variant">{debateRounds} round{debateRounds === 1 ? '' : 's'} selected</span>
                 </div>
 
-                {/* Tab Content */}
-                {activeTab !== 'synthesis' && typeof activeTab === 'number' && candidateResponses[activeTab] && (
-                  <div className="bg-surface-container border border-outline-variant rounded-xl p-4 max-h-[300px] overflow-y-auto">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider">
-                        {candidateResponses[activeTab].model} ({candidateResponses[activeTab].provider})
-                      </span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                        candidateResponses[activeTab].status === 'done' ? 'bg-green-500/10 text-green-500' :
-                        candidateResponses[activeTab].status === 'error' ? 'bg-red-500/10 text-red-500' :
-                        'bg-amber-500/10 text-amber-500'
-                      }`}>
-                        {candidateResponses[activeTab].status}
-                      </span>
+                <div className="overflow-x-auto rounded-xl border border-outline-variant bg-surface-container-low">
+                  <table className="w-full min-w-[960px] border-collapse text-left text-[12px]">
+                    <thead className="bg-surface-container text-on-surface-variant">
+                      <tr>
+                        <th className="w-52 border-b border-outline-variant px-3 py-2 font-semibold">Model</th>
+                        <th className="w-[28%] border-b border-outline-variant px-3 py-2 font-semibold">Initial Position</th>
+                        <th className="w-[34%] border-b border-outline-variant px-3 py-2 font-semibold">Debate Points</th>
+                        <th className="border-b border-outline-variant px-3 py-2 font-semibold">Latest Position</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(debateRecords.length > 0
+                        ? debateRecords
+                        : candidateResponses.map((c) => ({
+                            model: c.model,
+                            provider: c.provider,
+                            status: c.status,
+                            initialText: c.text,
+                            rounds: [],
+                            finalText: c.text,
+                            error: c.error,
+                          }))
+                      ).map((record, index) => (
+                        <tr key={`${record.provider}:${record.model}:${index}`} className="align-top">
+                          <td className="border-b border-outline-variant/70 px-3 py-3">
+                            <div className="font-semibold text-on-surface break-words">{record.model}</div>
+                            <div className="mt-1 text-[11px] text-on-surface-variant">{record.provider}</div>
+                            <span className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              record.status === 'done' ? 'bg-green-500/10 text-green-500' :
+                              record.status === 'error' ? 'bg-red-500/10 text-red-500' :
+                              'bg-amber-500/10 text-amber-500'
+                            }`}>
+                              {record.status}
+                            </span>
+                          </td>
+                          <td className="border-b border-outline-variant/70 px-3 py-3">
+                            <div className="max-h-44 overflow-y-auto whitespace-pre-wrap leading-relaxed text-on-surface">
+                              {record.initialText || 'Waiting for initial position...'}
+                            </div>
+                          </td>
+                          <td className="border-b border-outline-variant/70 px-3 py-3">
+                            <div className="space-y-3">
+                              {record.rounds.length === 0 && (
+                                <div className="text-on-surface-variant">No debate rounds completed yet.</div>
+                              )}
+                              {record.rounds.map((round) => (
+                                <div key={round.round} className="rounded-lg border border-outline-variant bg-surface-container px-3 py-2">
+                                  <div className="mb-1 flex items-center justify-between gap-2">
+                                    <span className="text-[11px] font-bold text-primary">Round {round.round}</span>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                      round.status === 'done' ? 'bg-green-500/10 text-green-500' :
+                                      round.status === 'error' ? 'bg-red-500/10 text-red-500' :
+                                      'bg-amber-500/10 text-amber-500'
+                                    }`}>
+                                      {round.status}
+                                    </span>
+                                  </div>
+                                  <div className="max-h-36 overflow-y-auto whitespace-pre-wrap leading-relaxed text-on-surface">
+                                    {round.text || 'Waiting for this model to respond...'}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="border-b border-outline-variant/70 px-3 py-3">
+                            <div className="max-h-44 overflow-y-auto whitespace-pre-wrap leading-relaxed text-on-surface">
+                              {record.finalText || record.initialText || 'Waiting for latest position...'}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {moderatorBriefs.length > 0 && (
+                  <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                      <span className="material-symbols-outlined text-secondary text-[18px]">record_voice_over</span>
+                      <label className="text-[13px] font-semibold text-on-surface">Synthesizer Moderator Briefs</label>
                     </div>
-                    <div className="text-[13px] text-on-surface whitespace-pre-wrap leading-relaxed">
-                      {candidateResponses[activeTab].text || 'Waiting for response...'}
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {moderatorBriefs.map((brief) => (
+                        <div key={brief.round} className="rounded-lg border border-outline-variant bg-surface-container p-3">
+                          <div className="mb-1 text-[11px] font-bold text-primary">Round {brief.round}</div>
+                          <div className="max-h-36 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed text-on-surface">
+                            {brief.text}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -472,7 +568,7 @@ export function ConsensusPage({ currentPage, onNavigate }: Props) {
             )}
 
             {/* Synthesized Answer */}
-            {(activeTab === 'synthesis' || !candidateResponses.length) && synthesizedAnswer && (
+            {synthesizedAnswer && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-primary text-[18px]">auto_awesome</span>

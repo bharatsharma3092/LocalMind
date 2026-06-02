@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 
+type MCPTransportType = 'stdio' | 'http+sse' | 'streamable-http'
+
 interface ServerStatus {
   id: string
   name: string
@@ -12,11 +14,13 @@ interface ServerStatus {
 interface ServerConfig {
   id?: string
   name: string
-  transport: 'stdio' | 'http+sse'
+  transport: MCPTransportType
   command?: string
   args?: string[]
   env?: Record<string, string>
   url?: string
+  headers?: Record<string, string>
+  apiKey?: string
   autoApprove?: string[]
 }
 
@@ -26,6 +30,7 @@ const emptyConfig: ServerConfig = {
   command: '',
   args: [],
   url: '',
+  apiKey: '',
   autoApprove: [],
 }
 
@@ -53,7 +58,9 @@ export function McpConfigEditor() {
     setConnecting(true)
     setError(null)
     try {
-      const res = await window.localmind.mcp.connect(form)
+      const { apiKey, ...serverConfig } = form
+      const headers = apiKey?.trim() ? { ...(form.headers ?? {}), Authorization: `Bearer ${apiKey.trim()}` } : form.headers
+      const res = await window.localmind.mcp.connect({ ...serverConfig, headers })
       if (!res.success) {
         setError(res.error ?? 'Failed to connect')
       } else {
@@ -90,6 +97,7 @@ export function McpConfigEditor() {
       command: '',
       args: [],
       url: '',
+      apiKey: '',
       autoApprove: [],
     })
   }
@@ -127,7 +135,7 @@ export function McpConfigEditor() {
           <div>
             <label className="text-xs text-text-muted block mb-1">Transport</label>
             <div className="flex gap-2">
-              {(['stdio', 'http+sse'] as const).map((t) => (
+              {(['stdio', 'streamable-http', 'http+sse'] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setForm({ ...form, transport: t })}
@@ -137,7 +145,7 @@ export function McpConfigEditor() {
                       : 'bg-surface border border-border text-text-muted hover:text-text'
                   }`}
                 >
-                  {t === 'stdio' ? 'Stdio' : 'HTTP/SSE'}
+                  {t === 'stdio' ? 'Stdio' : t === 'streamable-http' ? 'Streamable HTTP' : 'HTTP/SSE'}
                 </button>
               ))}
             </div>
@@ -169,16 +177,28 @@ export function McpConfigEditor() {
               </div>
             </>
           ) : (
-            <div>
-              <label className="text-xs text-text-muted block mb-1">Server URL</label>
-              <input
-                type="text"
-                value={form.url ?? ''}
-                onChange={(e) => setForm({ ...form, url: e.target.value })}
-                placeholder="e.g., http://localhost:3001/sse"
-                className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-accent"
-              />
-            </div>
+            <>
+              <div>
+                <label className="text-xs text-text-muted block mb-1">Server URL</label>
+                <input
+                  type="text"
+                  value={form.url ?? ''}
+                  onChange={(e) => setForm({ ...form, url: e.target.value })}
+                  placeholder={form.transport === 'streamable-http' ? 'e.g., https://mcp.apify.com' : 'e.g., http://localhost:3001/sse'}
+                  className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-accent"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-text-muted block mb-1">API Key / Bearer Token</label>
+                <input
+                  type="password"
+                  value={form.apiKey ?? ''}
+                  onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                  placeholder="Sent as Authorization: Bearer"
+                  className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-accent"
+                />
+              </div>
+            </>
           )}
 
           <div>

@@ -30,6 +30,12 @@ export interface AppSettings {
     enabled: boolean
     createdAt: number
   }[]
+  shortTermMemories?: {
+    id: string
+    content: string
+    sourceConversationId?: string
+    createdAt: number
+  }[]
   claudeCodeProxy?: {
     enabled: boolean
     port: number
@@ -64,6 +70,7 @@ const defaults: AppSettings = {
   },
   memoryEnabled: true,
   memories: [],
+  shortTermMemories: [],
   claudeCodeProxy: {
     enabled: false,
     port: 4000,

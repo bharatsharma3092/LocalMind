@@ -11,7 +11,14 @@ const log = {
 }
 
 export function useStreaming() {
-  const { addMessageLocal, updateStreamingMessage, finalizeStreamingMessage, setStreaming } = useChatStore()
+  const {
+    addMessageLocal,
+    updateStreamingMessage,
+    addToolCallToStreamingMessage,
+    addToolResultMessage,
+    finalizeStreamingMessage,
+    setStreaming
+  } = useChatStore()
   const streamIdRef = useRef<string | null>(null)
   const chunkCleanupRef = useRef<(() => void) | null>(null)
   const doneCleanupRef = useRef<(() => void) | null>(null)
@@ -95,17 +102,26 @@ export function useStreaming() {
     // -- onChunk listener
     const chunkCleanup = window.localmind.llm.onChunk(streamId, (chunk: LLMStreamChunk) => {
       if (chunk.type === 'tool_call' && chunk.toolCall) {
-        const toolName = chunk.toolCall.name || 'tool'
-        updateStreamingMessage(conversationId, assistantMsg.id, `\n\n_Using ${toolName}..._\n`)
+        addToolCallToStreamingMessage(conversationId, assistantMsg.id, {
+          id: chunk.toolCall.id,
+          name: chunk.toolCall.name,
+          arguments: chunk.toolCall.arguments ?? '{}'
+        })
         return
       }
 
       if (chunk.type === 'tool_result' && chunk.toolCall) {
-        const toolName = chunk.toolCall.name || 'tool'
-        const resultText = chunk.content && chunk.content !== 'Executing...'
-          ? `_${toolName} finished._\n`
-          : `_${toolName} is running..._\n`
-        updateStreamingMessage(conversationId, assistantMsg.id, `\n${resultText}`)
+        if (chunk.content && chunk.content !== 'Executing...') {
+          const toolResultMsg: Message = {
+            id: uuid(),
+            conversationId,
+            role: 'tool',
+            content: chunk.content,
+            toolCallId: chunk.toolCall.id,
+            createdAt: Date.now(),
+          }
+          addToolResultMessage(conversationId, toolResultMsg)
+        }
         return
       }
 

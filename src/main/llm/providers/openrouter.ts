@@ -137,7 +137,7 @@ export class OpenRouterProvider implements LLMProvider {
       const response = await fetch(`${this.baseUrl}/models`)
       if (!response.ok) return []
       const data = await response.json()
-      return (data.data ?? []).slice(0, 50).map((m: any) => ({
+      return (data.data ?? []).slice(0, 250).map((m: any) => ({
         id: m.id,
         name: m.name ?? m.id,
         provider: 'openrouter' as const,

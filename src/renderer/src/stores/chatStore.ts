@@ -18,6 +18,7 @@ export interface Message {
   conversationId: string
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  toolCallId?: string
   toolCalls?: any[]
   toolResults?: any[]
   modelId?: string
@@ -33,6 +34,7 @@ export interface Conversation {
   modelId: string | null
   provider: string | null
   starred: boolean
+  parentConversationId?: string | null
   createdAt: number
   updatedAt: number
 }
@@ -49,6 +51,8 @@ interface ChatStore {
   addMessage: (msg: Omit<Message, 'id' | 'createdAt'>) => Promise<Message>
   addMessageLocal: (convId: string, msg: Message) => void
   updateStreamingMessage: (convId: string, messageId: string, content: string) => void
+  addToolCallToStreamingMessage: (convId: string, messageId: string, toolCall: any) => void
+  addToolResultMessage: (convId: string, msg: Message) => Promise<void>
   finalizeStreamingMessage: (convId: string, messageId: string) => void
   deleteConversation: (id: string) => Promise<void>
   searchConversations: (query: string) => Promise<void>
@@ -65,15 +69,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   activeConversationId: null,
   isStreaming: false,
 
-  // -------------------------------------------------------------------------
   loadConversations: async () => {
     log.info('loadConversations', 'Fetching conversations from DB')
     const res = await window.localmind.db.getConversations()
     if (res.success && res.data) {
-      log.info('loadConversations', 'Conversations loaded', { count: res.data.length, ids: res.data.map((c: Conversation) => c.id) })
-      set({ conversations: res.data })
+      const primaryConvs = res.data.filter((c: any) => !c.parentConversationId)
+      log.info('loadConversations', 'Conversations loaded', { count: primaryConvs.length, ids: primaryConvs.map((c: Conversation) => c.id) })
+      set({ conversations: primaryConvs })
 
-      for (const conv of res.data) {
+      for (const conv of primaryConvs) {
         if (!conv.title) {
           window.localmind.db.generateTitle(conv.id).then((titleRes) => {
             if (titleRes.success && titleRes.data) {
@@ -87,7 +91,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  // -------------------------------------------------------------------------
   createConversation: async (data) => {
     const id = uuid()
     const now = Date.now()
@@ -170,7 +173,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     return id
   },
 
-  // -------------------------------------------------------------------------
   selectConversation: async (id) => {
     log.info('selectConversation', 'Selecting conversation', { id })
     set({ activeConversationId: id })
@@ -179,8 +181,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       log.info('selectConversation', 'No bucket in memory -- fetching messages from DB', { id })
       const res = await window.localmind.db.getMessages(id)
       if (res.success && res.data) {
-        log.info('selectConversation', 'Messages loaded from DB', { id, count: res.data.length })
-        set((s) => ({ messages: { ...s.messages, [id]: res.data } }))
+        const parsedMessages = res.data.map((m: any) => ({
+          ...m,
+          toolCalls: typeof m.toolCalls === 'string' ? JSON.parse(m.toolCalls) : (m.toolCalls || []),
+          toolResults: typeof m.toolResults === 'string' ? JSON.parse(m.toolResults) : (m.toolResults || []),
+        }))
+        log.info('selectConversation', 'Messages loaded from DB', { id, count: parsedMessages.length })
+        set((s) => ({ messages: { ...s.messages, [id]: parsedMessages } }))
       } else {
         log.error('selectConversation', 'Failed to load messages from DB', { id, res })
       }
@@ -189,7 +196,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  // -------------------------------------------------------------------------
   addMessageLocal: (convId, msg) => {
     log.info('addMessageLocal', 'Adding message to local store only', { convId, messageId: msg.id, role: msg.role })
     set((s) => ({
@@ -200,7 +206,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }))
   },
 
-  // -------------------------------------------------------------------------
   addMessage: async (msg) => {
     const message: Message = {
       ...msg,
@@ -234,7 +239,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     return message
   },
 
-  // -------------------------------------------------------------------------
   updateStreamingMessage: (convId, messageId, content) => {
     set((s) => {
       const msgs = s.messages[convId]
@@ -253,7 +257,40 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
 
-  // -------------------------------------------------------------------------
+  addToolCallToStreamingMessage: (convId, messageId, toolCall) => {
+    log.info('addToolCallToStreamingMessage', 'Adding tool call to streaming message', { convId, messageId, toolCall })
+    set((s) => {
+      const msgs = s.messages[convId] ?? []
+      return {
+        messages: {
+          ...s.messages,
+          [convId]: msgs.map((m) => {
+            if (m.id === messageId) {
+              const toolCalls = m.toolCalls ? [...m.toolCalls] : []
+              if (!toolCalls.some((tc) => tc.id === toolCall.id)) {
+                toolCalls.push(toolCall)
+              }
+              return { ...m, toolCalls }
+            }
+            return m
+          }),
+        },
+      }
+    })
+  },
+
+  addToolResultMessage: async (convId, msg) => {
+    log.info('addToolResultMessage', 'Adding tool result message to store + DB', { convId, msgId: msg.id })
+    set((s) => ({
+      messages: {
+        ...s.messages,
+        [convId]: [...(s.messages[convId] ?? []), msg],
+      },
+    }))
+    await window.localmind.db.saveMessage(msg)
+    log.info('addToolResultMessage', 'Tool result message persisted', { id: msg.id })
+  },
+
   finalizeStreamingMessage: (convId, messageId) => {
     log.info('finalizeStreamingMessage', 'Finalizing streaming message', { convId, messageId })
     set((s) => {
@@ -269,7 +306,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
 
-  // -------------------------------------------------------------------------
   deleteConversation: async (id) => {
     log.warn('deleteConversation', 'Deleting conversation (user-initiated)', { id })
     await window.localmind.db.deleteConversation(id)

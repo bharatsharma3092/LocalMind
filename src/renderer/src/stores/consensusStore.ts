@@ -9,11 +9,36 @@ export interface CandidateResponse {
   error?: string
 }
 
+export interface DebateRoundResponse {
+  round: number
+  text: string
+  status: 'pending' | 'done' | 'error'
+  error?: string
+}
+
+export interface DebateRecord {
+  model: string
+  provider: string
+  status: 'pending' | 'streaming' | 'done' | 'error'
+  initialText: string
+  rounds: DebateRoundResponse[]
+  finalText: string
+  error?: string
+}
+
+export interface ModeratorBrief {
+  round: number
+  text: string
+}
+
 interface ConsensusStore {
   selectedModels: ModelInfo[]
   synthesizerModel: ModelInfo | null
+  debateRounds: number
   isRunning: boolean
   candidateResponses: CandidateResponse[]
+  debateRecords: DebateRecord[]
+  moderatorBriefs: ModeratorBrief[]
   synthesizedAnswer: string
   streamId: string | null
   query: string
@@ -22,9 +47,11 @@ interface ConsensusStore {
   addModel: (model: ModelInfo) => void
   removeModel: (modelId: string) => void
   setSynthesizer: (model: ModelInfo | null) => void
+  setDebateRounds: (rounds: number) => void
   setQuery: (query: string) => void
   setRunning: (running: boolean) => void
   setCandidates: (candidates: CandidateResponse[]) => void
+  setDebateState: (state: { records?: DebateRecord[]; moderatorBriefs?: ModeratorBrief[] }) => void
   appendSynthesis: (text: string) => void
   setStreamId: (id: string | null) => void
   setConversationId: (id: string | null) => void
@@ -34,8 +61,11 @@ interface ConsensusStore {
 export const useConsensusStore = create<ConsensusStore>((set) => ({
   selectedModels: [],
   synthesizerModel: null,
+  debateRounds: 2,
   isRunning: false,
   candidateResponses: [],
+  debateRecords: [],
+  moderatorBriefs: [],
   synthesizedAnswer: '',
   streamId: null,
   query: '',
@@ -55,11 +85,22 @@ export const useConsensusStore = create<ConsensusStore>((set) => ({
 
   setSynthesizer: (model) => set({ synthesizerModel: model }),
 
+  setDebateRounds: (rounds) => {
+    const requestedRounds = Number(rounds)
+    set({ debateRounds: Number.isFinite(requestedRounds) ? Math.max(1, Math.min(3, Math.round(requestedRounds))) : 2 })
+  },
+
   setQuery: (query) => set({ query }),
 
   setRunning: (running) => set({ isRunning: running }),
 
   setCandidates: (candidates) => set({ candidateResponses: candidates }),
+
+  setDebateState: (state) =>
+    set((s) => ({
+      debateRecords: state.records ?? s.debateRecords,
+      moderatorBriefs: state.moderatorBriefs ?? s.moderatorBriefs,
+    })),
 
   appendSynthesis: (text) =>
     set((s) => ({ synthesizedAnswer: s.synthesizedAnswer + text })),
@@ -72,6 +113,8 @@ export const useConsensusStore = create<ConsensusStore>((set) => ({
     set({
       isRunning: false,
       candidateResponses: [],
+      debateRecords: [],
+      moderatorBriefs: [],
       synthesizedAnswer: '',
       streamId: null,
       conversationId: null,

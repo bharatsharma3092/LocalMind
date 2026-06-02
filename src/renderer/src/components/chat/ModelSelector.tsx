@@ -22,7 +22,11 @@ const builtinProviders = [
   { key: 'google', label: 'Google' },
 ]
 
-export function ModelSelector() {
+interface ModelSelectorProps {
+  align?: 'left' | 'right'
+}
+
+export function ModelSelector({ align = 'left' }: ModelSelectorProps) {
   const { availableModels, selectedModel, setModel, providerStatus, providerErrors, customProviders } = useProviderStore()
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -78,18 +82,25 @@ export function ModelSelector() {
       {/* Trigger pill */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 bg-surface-container py-1.5 px-3 rounded-lg border border-outline-variant cursor-pointer active:scale-95 hover:bg-surface-container-high transition-colors duration-200"
+        className="flex items-center justify-between w-full gap-2 bg-surface-container py-1.5 px-3 rounded-lg border border-outline-variant cursor-pointer active:scale-95 hover:bg-surface-container-high transition-colors duration-200"
       >
-        <span className={`w-2 h-2 rounded-full shrink-0 ${statusColors[currentStatus]}`} />
-        <span className="font-semibold text-[14px] text-on-surface truncate max-w-[160px]">
-          {selectedModel ? `${selectedModel.provider}: ${selectedModel.name}` : 'Select Model'}
-        </span>
-        <span className="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${statusColors[currentStatus]}`} />
+          <span className="font-semibold text-[14px] text-on-surface truncate max-w-[180px]">
+            {selectedModel
+              ? `${selectedModel.customProviderId
+                  ? (customProviders.find((p) => p.id === selectedModel.customProviderId)?.name ?? 'Custom')
+                  : selectedModel.provider
+                }: ${selectedModel.name}`
+              : 'Select Model'}
+          </span>
+        </div>
+        <span className="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">expand_more</span>
       </button>
 
       {/* Dropdown */}
       {isOpen && (
-        <div className="absolute top-full left-0 mt-1 w-80 bg-surface-container border border-outline-variant rounded-xl shadow-2xl z-50 overflow-hidden">
+        <div className={`absolute top-full ${align === 'right' ? 'right-0' : 'left-0'} mt-1 w-80 bg-surface-container border border-outline-variant rounded-xl shadow-2xl z-50 overflow-hidden`}>
           <div className="p-2 border-b border-outline-variant">
             <input
               type="text"

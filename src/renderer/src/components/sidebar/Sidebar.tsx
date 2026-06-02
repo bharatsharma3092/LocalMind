@@ -78,6 +78,17 @@ export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
       {/* Footer Tabs */}
       <div className="mt-auto px-2 space-y-1 pt-4 border-t border-outline-variant/50">
         <button
+          onClick={goHome}
+          className={`w-full flex items-center py-3 px-4 text-[12px] uppercase tracking-widest font-bold transition-all hover:translate-x-1 duration-200 ${
+            currentPage === 'chat'
+              ? 'text-accent bg-accent/10 border-l-4 border-primary-container'
+              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high/40 border-l-4 border-transparent'
+          }`}
+        >
+          <span className="material-symbols-outlined mr-3 text-[20px]">home</span>
+          Home
+        </button>
+        <button
           onClick={onSettingsClick}
           className={`w-full flex items-center py-3 px-4 text-[12px] uppercase tracking-widest font-bold transition-all hover:translate-x-1 duration-200 ${
             currentPage === 'settings'

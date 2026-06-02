@@ -1,13 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
 
+type MCPTransportType = 'stdio' | 'http+sse' | 'streamable-http'
+
 interface ServerConfig {
   id?: string
   name: string
-  transport: 'stdio' | 'http+sse'
+  transport: MCPTransportType
   command?: string
   args?: string[]
   env?: Record<string, string>
   url?: string
+  headers?: Record<string, string>
+  apiKey?: string
   autoApprove?: string[]
 }
 
@@ -28,6 +32,7 @@ export function McpStatusPanel() {
     command: '',
     args: [],
     url: '',
+    apiKey: '',
     autoApprove: [],
   })
 
@@ -43,9 +48,13 @@ export function McpStatusPanel() {
   }, [refreshStatus])
 
   const handleConnect = async () => {
-    await window.localmind.mcp.connect(configForm)
+    const { apiKey, ...serverConfig } = configForm
+    await window.localmind.mcp.connect({
+      ...serverConfig,
+      headers: apiKey?.trim() ? { ...(configForm.headers ?? {}), Authorization: `Bearer ${apiKey.trim()}` } : configForm.headers,
+    })
     setShowConfig(false)
-    setConfigForm({ name: '', transport: 'stdio', command: '', args: [], url: '', autoApprove: [] })
+    setConfigForm({ name: '', transport: 'stdio', command: '', args: [], url: '', apiKey: '', autoApprove: [] })
     refreshStatus()
   }
 
@@ -82,10 +91,11 @@ export function McpStatusPanel() {
           />
           <select
             value={configForm.transport}
-            onChange={(e) => setConfigForm({ ...configForm, transport: e.target.value as 'stdio' | 'http+sse' })}
+            onChange={(e) => setConfigForm({ ...configForm, transport: e.target.value as MCPTransportType })}
             className="w-full bg-surface border border-border rounded px-2 py-1.5 text-sm text-text"
           >
             <option value="stdio">stdio</option>
+            <option value="streamable-http">Streamable HTTP</option>
             <option value="http+sse">HTTP/SSE</option>
           </select>
           {configForm.transport === 'stdio' ? (
@@ -106,13 +116,22 @@ export function McpStatusPanel() {
               />
             </>
           ) : (
-            <input
-              type="text"
-              value={configForm.url ?? ''}
-              onChange={(e) => setConfigForm({ ...configForm, url: e.target.value })}
-              placeholder="Server URL"
-              className="w-full bg-surface border border-border rounded px-2 py-1.5 text-sm text-text"
-            />
+            <>
+              <input
+                type="text"
+                value={configForm.url ?? ''}
+                onChange={(e) => setConfigForm({ ...configForm, url: e.target.value })}
+                placeholder={configForm.transport === 'streamable-http' ? 'https://mcp.apify.com' : 'Server URL'}
+                className="w-full bg-surface border border-border rounded px-2 py-1.5 text-sm text-text"
+              />
+              <input
+                type="password"
+                value={configForm.apiKey ?? ''}
+                onChange={(e) => setConfigForm({ ...configForm, apiKey: e.target.value })}
+                placeholder="API key / Bearer token"
+                className="w-full bg-surface border border-border rounded px-2 py-1.5 text-sm text-text"
+              />
+            </>
           )}
           <div className="flex gap-2">
             <button onClick={handleConnect} className="btn-primary text-xs py-1">Connect</button>

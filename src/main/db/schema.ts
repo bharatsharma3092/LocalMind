@@ -3,6 +3,7 @@ import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core'
 export const workspaces = sqliteTable('workspaces', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
+  rootPath: text('root_path'),
   systemPrompt: text('system_prompt'),
   defaultModel: text('default_model'),
   mcpConfig: text('mcp_config'),
@@ -19,6 +20,10 @@ export const conversations = sqliteTable('conversations', {
   provider: text('provider'),
   tokenUsage: text('token_usage'),
   starred: integer('starred', { mode: 'boolean' }).default(false),
+  sandboxMode: integer('sandbox_mode', { mode: 'boolean' }).default(false),
+  queueMode: text('queue_mode').default('steer'),
+  summary: text('summary'),
+  parentConversationId: text('parent_conversation_id'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 })
@@ -35,6 +40,7 @@ export const messages = sqliteTable('messages', {
   parentMessageId: text('parent_message_id'),
   branchId: text('branch_id'),
   createdAt: integer('created_at').notNull(),
+  toolCallId: text('tool_call_id'),
 })
 
 export const artifacts = sqliteTable('artifacts', {
@@ -118,4 +124,28 @@ export const skillPipelines = sqliteTable('skill_pipelines', {
   name: text('name').notNull(),
   steps: text('steps').notNull(),
   createdAt: integer('created_at').notNull(),
+})
+
+export const memories = sqliteTable('memories', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(), // 'semantic' | 'summary'
+  content: text('content').notNull(),
+  importanceScore: real('importance_score').default(0.5),
+  sourceConversationId: text('source_conversation_id').references(() => conversations.id),
+  enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+})
+
+export const commitments = sqliteTable('commitments', {
+  id: text('id').primaryKey(),
+  description: text('description').notNull(),
+  status: text('status').notNull(), // 'pending' | 'in_progress' | 'completed'
+  dueAt: integer('due_at'),
+  completedAt: integer('completed_at'),
+  sourceConversationId: text('source_conversation_id').references(() => conversations.id),
+  sourceMessageId: text('source_message_id').references(() => messages.id),
+  metadataJson: text('metadata_json'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
 })

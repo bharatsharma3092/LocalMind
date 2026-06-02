@@ -14,11 +14,13 @@ import { AgentToolPermissionDialog } from './components/agents/AgentToolPermissi
 import { useSettingsStore } from './stores/settingsStore'
 import { useProviderStore } from './stores/providerStore'
 import { usePersonaStore } from './stores/personaStore'
+import { useChatStore } from './stores/chatStore'
 
 function App() {
   const { loadSettings } = useSettingsStore()
   const { refreshAllModels, loadCustomProviders } = useProviderStore()
   const { loadPersonas } = usePersonaStore()
+  const clearActiveConversation = useChatStore((state) => state.clearActiveConversation)
   const [currentPage, setCurrentPage] = useState<AppPage>('chat')
   const [settingsTab, setSettingsTab] = useState<'general' | 'profile' | 'memory' | 'models' | 'mcp' | 'personas' | 'data'>('general')
 
@@ -38,6 +40,16 @@ function App() {
     window.addEventListener('localmind:open-settings-tab', handleOpenSettingsTab)
     return () => window.removeEventListener('localmind:open-settings-tab', handleOpenSettingsTab)
   }, [])
+
+  useEffect(() => {
+    const handleGoHome = () => {
+      clearActiveConversation()
+      setCurrentPage('chat')
+    }
+
+    window.addEventListener('localmind:go-home', handleGoHome)
+    return () => window.removeEventListener('localmind:go-home', handleGoHome)
+  }, [clearActiveConversation])
 
   const handleNavigate = (page: AppPage) => {
     setCurrentPage(page)

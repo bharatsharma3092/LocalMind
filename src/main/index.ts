@@ -8,6 +8,12 @@ let mainWindow: BrowserWindow | null = null
 
 const gotTheLock = app.requestSingleInstanceLock()
 
+function getAppIconPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'resources', 'icon.png')
+    : join(app.getAppPath(), 'resources', 'icon.png')
+}
+
 if (!gotTheLock) {
   app.quit()
 } else {
@@ -39,6 +45,7 @@ if (!gotTheLock) {
 
 function createWindow(): void {
   const bounds = appStore.get('windowBounds')
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL
 
   mainWindow = new BrowserWindow({
     width: bounds?.width ?? 1280,
@@ -46,6 +53,7 @@ function createWindow(): void {
     x: bounds?.x,
     y: bounds?.y,
     show: false,
+    icon: getAppIconPath(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       nodeIntegration: false,
@@ -71,9 +79,36 @@ function createWindow(): void {
     mainWindow = null
   })
 
+  const isAppNavigation = (url: string) => {
+    if (rendererUrl && url.startsWith(rendererUrl)) return true
+    if (url.startsWith('file://')) return true
+    if (url === 'about:blank') return true
+    return false
+  }
+
+  const openOutsideApp = (url: string) => {
+    if (/^(https?:|mailto:|tel:)/i.test(url)) {
+      shell.openExternal(url).catch((err) => {
+        console.error('Failed to open external URL:', err)
+      })
+    }
+  }
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (!isAppNavigation(url)) openOutsideApp(url)
     return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isAppNavigation(url)) return
+    event.preventDefault()
+    openOutsideApp(url)
+  })
+
+  mainWindow.webContents.on('will-redirect', (event, url) => {
+    if (isAppNavigation(url)) return
+    event.preventDefault()
+    openOutsideApp(url)
   })
 
   if (appStore.get('windowMaximized')) {
@@ -83,8 +118,8 @@ function createWindow(): void {
   registerIpcHandlers(mainWindow)
 
   // Load renderer
-  if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+  if (rendererUrl) {
+    mainWindow.loadURL(rendererUrl)
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }

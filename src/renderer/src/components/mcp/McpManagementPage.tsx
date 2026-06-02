@@ -1,15 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
 import { PageNavIcons } from '../ui/PageNavIcons'
 import type { AppPage } from '../sidebar/Sidebar'
+import { useNotificationStore } from '../../stores/notificationStore'
+
+type MCPTransportType = 'stdio' | 'http+sse' | 'streamable-http'
 
 interface ServerConfig {
   id?: string
   name: string
-  transport: 'stdio' | 'http+sse'
+  transport: MCPTransportType
   command?: string
   args?: string[]
   env?: Record<string, string>
   url?: string
+  headers?: Record<string, string>
+  apiKey?: string
+  headersText?: string
   autoApprove?: string[]
 }
 
@@ -33,9 +39,17 @@ interface MarketplaceItem {
   command?: string
   args?: string[]
   url?: string
-  transport: 'stdio' | 'http+sse'
+  transport: MCPTransportType
   requiresConfig?: boolean
-  configFields?: { key: string; label: string; placeholder: string; envVar?: string }[]
+  configFields?: {
+    key: string
+    label: string
+    placeholder: string
+    envVar?: string
+    headerName?: string
+    headerPrefix?: string
+    sensitive?: boolean
+  }[]
 }
 
 const marketplaceItems: MarketplaceItem[] = [
@@ -143,19 +157,48 @@ const marketplaceItems: MarketplaceItem[] = [
   },
   // Web & Search
   {
+    id: 'mcp-apify',
+    name: 'Apify',
+    description: 'Hosted Apify MCP server for Actors, crawlers, scraping, and web automation over Streamable HTTP.',
+    icon: 'travel_explore',
+    iconColor: 'text-amber-400',
+    iconBg: 'bg-amber-500/20',
+    category: 'Web & Search',
+    url: 'https://mcp.apify.com',
+    transport: 'streamable-http',
+    requiresConfig: true,
+    configFields: [
+      {
+        key: 'apiKey',
+        label: 'Apify API Token',
+        placeholder: 'apify_api_...',
+        headerName: 'Authorization',
+        headerPrefix: 'Bearer ',
+        sensitive: true,
+      },
+    ],
+  },
+  {
     id: 'mcp-firecrawl',
     name: 'Firecrawl',
-    description: 'Advanced web scraping with content extraction, crawling, and search functionalities.',
+    description: 'Hosted Firecrawl MCP for search, scraping, crawling, extraction, and browser sessions over Streamable HTTP.',
     icon: 'local_fire_department',
     iconColor: 'text-red-400',
     iconBg: 'bg-red-500/20',
     category: 'Web & Search',
-    packageName: '@michaellatman/mcp-get-firecrawl',
-    command: 'npx',
-    args: ['-y', '@michaellatman/mcp-get-firecrawl'],
-    transport: 'stdio',
+    url: 'https://mcp.firecrawl.dev/v2/mcp',
+    transport: 'streamable-http',
     requiresConfig: true,
-    configFields: [{ key: 'apiKey', label: 'Firecrawl API Key', placeholder: 'fc-xxxxxxxx', envVar: 'FIRECRAWL_API_KEY' }],
+    configFields: [
+      {
+        key: 'apiKey',
+        label: 'Firecrawl API Key',
+        placeholder: 'fc-xxxxxxxx',
+        headerName: 'Authorization',
+        headerPrefix: 'Bearer ',
+        sensitive: true,
+      },
+    ],
   },
   {
     id: 'mcp-browserbase',
@@ -247,6 +290,50 @@ const marketplaceItems: MarketplaceItem[] = [
     args: ['-y', '@modelcontextprotocol/server-gdrive'],
     transport: 'stdio',
   },
+  {
+    id: 'mcp-gmail',
+    name: 'Official Google Workspace (Gmail & Calendar)',
+    description: 'Google Workspace integration for Gmail, Calendar, Drive, Docs, Sheets, Slides, and Forms. Run "npx google-workspace-mcp setup" and "npx google-workspace-mcp accounts add personal" once before connecting.',
+    icon: 'mail',
+    iconColor: 'text-red-400',
+    iconBg: 'bg-red-500/20',
+    category: 'Official',
+    packageName: 'google-workspace-mcp',
+    command: 'npx',
+    args: ['-y', 'google-workspace-mcp', 'serve'],
+    transport: 'stdio',
+  },
+  {
+    id: 'mcp-outlook',
+    name: 'Outlook Mail & Calendar',
+    description: 'Connects to your Microsoft Graph API to search emails, read mailbox threads, and view calendar appointments.',
+    icon: 'calendar_month',
+    iconColor: 'text-blue-500',
+    iconBg: 'bg-blue-600/20',
+    category: 'Productivity',
+    packageName: 'mcp-microsoft-graph',
+    command: 'npx',
+    args: ['-y', 'mcp-microsoft-graph@latest'],
+    transport: 'stdio',
+    requiresConfig: true,
+    configFields: [
+      { key: 'tenantId', label: 'Azure Tenant ID', placeholder: 'common', envVar: 'MS_GRAPH_TENANT_ID' },
+      { key: 'clientId', label: 'Azure Client ID', placeholder: 'xxxx-xxxx-xxxx', envVar: 'MS_GRAPH_CLIENT_ID' }
+    ]
+  },
+  {
+    id: 'mcp-computer-use',
+    name: 'Official OS Computer Use',
+    description: "Anthropic's official OS World Computer Use integration. Enables mouse control, keyboard typing, window activation, and screenshot OCR capturing.",
+    icon: 'desktop_windows',
+    iconColor: 'text-teal-400',
+    iconBg: 'bg-teal-500/20',
+    category: 'Official',
+    packageName: 'computer-control-mcp',
+    command: 'uvx',
+    args: ['computer-control-mcp'],
+    transport: 'stdio',
+  },
 ]
 
 const statusConfig = {
@@ -259,6 +346,37 @@ const statusConfig = {
 function processCommand(command?: string) {
   if (command === 'npx' && navigator.userAgent.includes('Windows')) return 'npx.cmd'
   return command
+}
+
+function parseHeaderLines(value?: string): Record<string, string> {
+  if (!value?.trim()) return {}
+
+  return value.split('\n').reduce<Record<string, string>>((headers, line) => {
+    const separatorIndex = line.indexOf(':')
+    if (separatorIndex <= 0) return headers
+
+    const key = line.slice(0, separatorIndex).trim()
+    const headerValue = line.slice(separatorIndex + 1).trim()
+    if (key && headerValue) headers[key] = headerValue
+    return headers
+  }, {})
+}
+
+function buildConnectConfig(config: ServerConfig): ServerConfig {
+  const { apiKey, headersText, headers: existingHeaders, ...serverConfig } = config
+  const headers = {
+    ...(existingHeaders ?? {}),
+    ...parseHeaderLines(headersText),
+  }
+
+  if (apiKey?.trim()) {
+    headers.Authorization = `Bearer ${apiKey.trim()}`
+  }
+
+  return {
+    ...serverConfig,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
+  }
 }
 
 interface McpPageProps {
@@ -277,12 +395,16 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
     command: '',
     args: [],
     url: '',
+    apiKey: '',
+    headersText: '',
     autoApprove: [],
   })
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set())
   const [installingItem, setInstallingItem] = useState<MarketplaceItem | null>(null)
   const [installConfig, setInstallConfig] = useState<Record<string, string>>({})
   const installConfigComplete = !installingItem?.configFields?.some((field) => !installConfig[field.key]?.trim())
+
+  const addToast = useNotificationStore((s) => s.add)
 
   const refreshStatus = useCallback(async () => {
     const res = await window.localmind.mcp.serverStatus()
@@ -302,6 +424,7 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
       await refreshStatus()
     } catch (err: any) {
       console.error('[MCP]', err)
+      addToast('error', err.message || 'Operation failed')
     } finally {
       setLoadingIds((prev) => {
         const next = new Set(prev)
@@ -312,31 +435,67 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
   }
 
   const handleConnect = async () => {
-    await window.localmind.mcp.connect(configForm)
-    setShowAddForm(false)
-    setConfigForm({ name: '', transport: 'stdio', command: '', args: [], url: '', autoApprove: [] })
+    const connectConfig = buildConnectConfig(configForm)
+    const res = await window.localmind.mcp.connect(connectConfig)
+    if (res && !res.success) {
+      addToast('error', `Failed to connect server: ${res.error || 'Unknown error'}`)
+    } else {
+      addToast('success', `Connected server "${configForm.name}" successfully`)
+      setShowAddForm(false)
+      setConfigForm({ name: '', transport: 'stdio', command: '', args: [], url: '', apiKey: '', headersText: '', autoApprove: [] })
+    }
     await refreshStatus()
   }
 
   const handleDisconnect = (id: string) => withLoading(id, async () => {
-    await window.localmind.mcp.disconnect(id)
+    const res = await window.localmind.mcp.disconnect(id)
+    if (res && !res.success) {
+      addToast('error', `Failed to disconnect server: ${res.error || 'Unknown error'}`)
+    } else {
+      addToast('success', 'Disconnected server successfully')
+    }
   })
 
   const handleRestart = (id: string) => withLoading(id, async () => {
-    await window.localmind.mcp.restart(id)
+    const res = await window.localmind.mcp.restart(id)
+    if (res && !res.success) {
+      addToast('error', `Failed to restart server: ${res.error || 'Unknown error'}`)
+    } else {
+      addToast('success', 'Restarted server successfully')
+    }
   })
 
   const handleServerConnect = (server: ServerStatus) => withLoading(server.id, async () => {
     try {
-      await window.localmind.mcp.restart(server.id)
-    } catch {
-      await window.localmind.mcp.connect({ id: server.id, name: server.name })
+      const res = await window.localmind.mcp.restart(server.id)
+      if (res && !res.success) {
+        const connRes = await window.localmind.mcp.connect({ id: server.id, name: server.name })
+        if (connRes && !connRes.success) {
+          addToast('error', `Failed to connect: ${connRes.error || 'Unknown error'}`)
+        } else {
+          addToast('success', `Connected server "${server.name}"`)
+        }
+      } else {
+        addToast('success', `Connected server "${server.name}"`)
+      }
+    } catch (err: any) {
+      const connRes = await window.localmind.mcp.connect({ id: server.id, name: server.name })
+      if (connRes && !connRes.success) {
+        addToast('error', `Failed to connect: ${connRes.error || 'Unknown error'}`)
+      } else {
+        addToast('success', `Connected server "${server.name}"`)
+      }
     }
   })
 
   const handleDelete = (id: string) => withLoading(id, async () => {
     if (window.localmind.mcp.removeServer) {
-      await window.localmind.mcp.removeServer(id)
+      const res = await window.localmind.mcp.removeServer(id)
+      if (res && !res.success) {
+        addToast('error', `Failed to delete server: ${res.error || 'Unknown error'}`)
+      } else {
+        addToast('success', 'Deleted server successfully')
+      }
     }
   })
 
@@ -354,7 +513,26 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
         args: item.args,
         url: item.url,
       }
-      window.localmind.mcp.connect(config).then(() => refreshStatus())
+      setLoadingIds((prev) => new Set(prev).add(item.id))
+      window.localmind.mcp.connect(config)
+        .then((res) => {
+          if (res && !res.success) {
+            addToast('error', `Failed to install "${item.name}": ${res.error || 'Unknown error'}`)
+          } else {
+            addToast('success', `Installed and connected "${item.name}" successfully`)
+          }
+          refreshStatus()
+        })
+        .catch((err) => {
+          addToast('error', `Failed to install "${item.name}": ${err.message || err}`)
+        })
+        .finally(() => {
+          setLoadingIds((prev) => {
+            const next = new Set(prev)
+            next.delete(item.id)
+            return next
+          })
+        })
     }
   }
 
@@ -362,11 +540,15 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
     if (!installingItem) return
     const item = installingItem
     const env: Record<string, string> = {}
+    const headers: Record<string, string> = {}
     const args = item.args ? [...item.args] : []
 
     item.configFields?.forEach((field) => {
       if (field.envVar && installConfig[field.key]) {
         env[field.envVar] = installConfig[field.key]
+      }
+      if (field.headerName && installConfig[field.key]) {
+        headers[field.headerName] = `${field.headerPrefix ?? ''}${installConfig[field.key]}`
       }
       // Replace placeholders in args
       for (let i = 0; i < args.length; i++) {
@@ -384,12 +566,29 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
       args,
       url: item.url,
       env: Object.keys(env).length > 0 ? env : undefined,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
     }
 
-    await window.localmind.mcp.connect(config)
-    setInstallingItem(null)
-    setInstallConfig({})
-    await refreshStatus()
+    setLoadingIds((prev) => new Set(prev).add(item.id))
+    try {
+      const res = await window.localmind.mcp.connect(config)
+      if (res && !res.success) {
+        addToast('error', `Failed to install "${item.name}": ${res.error || 'Unknown error'}`)
+      } else {
+        addToast('success', `Installed and connected "${item.name}" successfully`)
+      }
+    } catch (err: any) {
+      addToast('error', `Failed to install "${item.name}": ${err.message || err}`)
+    } finally {
+      setLoadingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(item.id)
+        return next
+      })
+      setInstallingItem(null)
+      setInstallConfig({})
+      await refreshStatus()
+    }
   }
 
   const categories = ['All', ...Array.from(new Set(marketplaceItems.map((i) => i.category)))]
@@ -455,11 +654,12 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
                   <label className="block text-[12px] font-semibold text-on-surface-variant uppercase mb-2">Transport</label>
                   <select
                     value={configForm.transport}
-                    onChange={(e) => setConfigForm({ ...configForm, transport: e.target.value as 'stdio' | 'http+sse' })}
+                    onChange={(e) => setConfigForm({ ...configForm, transport: e.target.value as MCPTransportType })}
                     className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
                   >
                     <option value="stdio">stdio</option>
-                    <option value="http+sse">HTTP/SSE</option>
+                    <option value="streamable-http">Streamable HTTP</option>
+                    <option value="http+sse">HTTP/SSE (legacy)</option>
                   </select>
                 </div>
                 {configForm.transport === 'stdio' ? (
@@ -486,22 +686,45 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
                     </div>
                   </>
                 ) : (
-                  <div className="md:col-span-2">
-                    <label className="block text-[12px] font-semibold text-on-surface-variant uppercase mb-2">Server URL</label>
-                    <input
-                      type="text"
-                      value={configForm.url ?? ''}
-                      onChange={(e) => setConfigForm({ ...configForm, url: e.target.value })}
-                      placeholder="https://example.com/mcp"
-                      className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
-                    />
-                  </div>
+                  <>
+                    <div className="md:col-span-2">
+                      <label className="block text-[12px] font-semibold text-on-surface-variant uppercase mb-2">Server URL</label>
+                      <input
+                        type="text"
+                        value={configForm.url ?? ''}
+                        onChange={(e) => setConfigForm({ ...configForm, url: e.target.value })}
+                        placeholder={configForm.transport === 'streamable-http' ? 'https://example.com/mcp' : 'https://example.com/sse'}
+                        className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[12px] font-semibold text-on-surface-variant uppercase mb-2">API Key / Bearer Token</label>
+                      <input
+                        type="password"
+                        value={configForm.apiKey ?? ''}
+                        onChange={(e) => setConfigForm({ ...configForm, apiKey: e.target.value })}
+                        placeholder="Paste token for Authorization: Bearer"
+                        className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
+                      />
+                      <p className="mt-1 text-xs text-on-surface-variant">Use this for Apify and other remote MCP servers that expect a Bearer token.</p>
+                    </div>
+                    <div>
+                      <label className="block text-[12px] font-semibold text-on-surface-variant uppercase mb-2">Extra Headers</label>
+                      <textarea
+                        value={configForm.headersText ?? ''}
+                        onChange={(e) => setConfigForm({ ...configForm, headersText: e.target.value })}
+                        placeholder={'X-API-Key: your-token\nX-Custom-Header: value'}
+                        rows={3}
+                        className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary resize-none"
+                      />
+                    </div>
+                  </>
                 )}
               </div>
               <div className="flex gap-3 mt-4">
                 <button
                   onClick={handleConnect}
-                  disabled={!configForm.name.trim()}
+                  disabled={!configForm.name.trim() || (configForm.transport === 'stdio' ? !configForm.command?.trim() : !configForm.url?.trim())}
                   className="px-4 py-2 bg-primary-container text-white rounded-lg text-sm font-semibold hover:bg-accent-hover transition-colors disabled:opacity-40"
                 >
                   Connect
@@ -537,7 +760,7 @@ export function McpManagementPage({ currentPage, onNavigate }: McpPageProps) {
                         {field.label}
                       </label>
                       <input
-                        type="text"
+                        type={field.sensitive ? 'password' : 'text'}
                         value={installConfig[field.key] || ''}
                         onChange={(e) => setInstallConfig((prev) => ({ ...prev, [field.key]: e.target.value }))}
                         placeholder={field.placeholder}

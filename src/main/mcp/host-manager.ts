@@ -1,16 +1,20 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ChildProcess } from 'child_process'
+
+export type MCPTransportType = 'stdio' | 'http+sse' | 'streamable-http'
 
 export interface MCPServerConfig {
   id: string
   name: string
-  transport: 'stdio' | 'http+sse'
+  transport: MCPTransportType
   command?: string
   args?: string[]
   env?: Record<string, string>
   url?: string
+  headers?: Record<string, string>
   autoApprove?: string[]
   enabled?: boolean
 }
@@ -51,7 +55,7 @@ export interface MCPPromptInfo {
 
 interface ConnectedServer {
   client: Client
-  transport: StdioClientTransport | SSEClientTransport
+  transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport
   process?: ChildProcess
   config: MCPServerConfig
   toolCount: number
@@ -65,6 +69,30 @@ const log = {
   error: (msg: string, data?: unknown) => console.error(`[MCP] [ERROR] ${msg}`, data !== undefined ? data : ''),
 }
 
+function requestInitForRemoteTransport(config: MCPServerConfig): RequestInit | undefined {
+  const headers = Object.entries(config.headers ?? {}).reduce<Record<string, string>>((acc, [key, value]) => {
+    const cleanKey = key.trim()
+    const cleanValue = value.trim()
+    if (cleanKey && cleanValue) acc[cleanKey] = cleanValue
+    return acc
+  }, {})
+
+  return Object.keys(headers).length > 0 ? { headers } : undefined
+}
+
+function enrichConnectionError(message: string): string {
+  if (/connection closed/i.test(message) && !message.includes('\n')) {
+    return `${message}\nThe MCP server process exited before completing the handshake. Check the command, arguments, API keys, and whether the package is still valid.`
+  }
+  if (/\b401\b/.test(message)) {
+    return `${message}\nRemote MCP server returned 401 Unauthorized. Add or verify the API key/Bearer token in the server headers.`
+  }
+  if (/\b403\b/.test(message)) {
+    return `${message}\nRemote MCP server returned 403 Forbidden. Check the API key permissions and account access for this MCP server.`
+  }
+  return message
+}
+
 class MCPHostManager {
   private servers = new Map<string, ConnectedServer>()
 
@@ -73,20 +101,65 @@ class MCPHostManager {
       await this.disconnectServer(config.id)
     }
 
-    let transport: StdioClientTransport | SSEClientTransport
+    let transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport
+    let stderrOutput = ''
 
     if (config.transport === 'stdio') {
       if (!config.command) throw new Error('stdio transport requires a command')
-      log.info(`Connecting stdio: ${config.command} ${(config.args ?? []).join(' ')}`)
+      
+      let finalCommand = config.command
+      let finalArgs = config.args ?? []
+      
+      if (process.platform === 'win32') {
+        // Use cmd.exe /c to launch batch files or CLI scripts on Windows reliably
+        finalCommand = 'cmd.exe'
+        finalArgs = ['/c', config.command, ...(config.args ?? [])]
+      }
+      
+      log.info(`Connecting stdio: ${finalCommand} ${finalArgs.join(' ')}`)
       transport = new StdioClientTransport({
-        command: config.command,
-        args: config.args,
+        command: finalCommand,
+        args: finalArgs,
         env: config.env ? { ...process.env, ...config.env } : undefined,
+        stderr: 'pipe',
       })
+
+      const stderr = transport.stderr
+      if (stderr) {
+        log.info(`Hooked stderr for server "${config.name}"`)
+        stderr.on('data', (chunk: Buffer) => {
+          const text = chunk.toString('utf-8')
+          stderrOutput = `${stderrOutput}${text}`.slice(-8000)
+          log.info(`[${config.name} STDERR] ${text.trim()}`)
+
+          // Automatically parse and launch OAuth URLs in the default browser
+          const urlMatch = text.match(/https?:\/\/[^\s"'`]+/g)
+          if (urlMatch) {
+            for (const url of urlMatch) {
+              if (url.includes('google.com') || url.includes('accounts.google') || url.includes('oauth')) {
+                log.info(`Detected OAuth URL on stderr: ${url}`)
+                import('electron').then(({ shell }) => {
+                  shell.openExternal(url).catch(err => {
+                    log.error(`Failed to open OAuth URL: ${err.message}`)
+                  })
+                })
+              }
+            }
+          }
+        })
+      }
     } else if (config.transport === 'http+sse') {
       if (!config.url) throw new Error('http+sse transport requires a URL')
       log.info(`Connecting SSE: ${config.url}`)
-      transport = new SSEClientTransport(new URL(config.url))
+      transport = new SSEClientTransport(new URL(config.url), {
+        requestInit: requestInitForRemoteTransport(config),
+      })
+    } else if (config.transport === 'streamable-http') {
+      if (!config.url) throw new Error('streamable-http transport requires a URL')
+      log.info(`Connecting Streamable HTTP: ${config.url}`)
+      transport = new StreamableHTTPClientTransport(new URL(config.url), {
+        requestInit: requestInitForRemoteTransport(config),
+      })
     } else {
       throw new Error(`Unknown transport type: ${config.transport}`)
     }
@@ -122,9 +195,12 @@ class MCPHostManager {
       this.servers.set(config.id, { client, transport, config, toolCount, resourceCount })
       log.info(`Server "${config.name}" (${config.id}) registered with ${toolCount} tools, ${resourceCount} resources`)
     } catch (err: any) {
-      log.error(`Failed to connect "${config.name}": ${err.message}`, err.stack)
+      const stderrMessage = stderrOutput.trim()
+      const baseMessage = stderrMessage ? `${err.message}\n${stderrMessage}` : err.message
+      const message = enrichConnectionError(baseMessage)
+      log.error(`Failed to connect "${config.name}": ${message}`, err.stack)
       try { await transport.close() } catch {}
-      throw new Error(`Failed to connect to MCP server "${config.name}": ${err.message}`)
+      throw new Error(`Failed to connect to MCP server "${config.name}": ${message}`)
     }
   }
 

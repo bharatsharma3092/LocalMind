@@ -18,6 +18,7 @@ describe('Database schema and CRUD', () => {
     sqlite.run(`CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
+      root_path TEXT,
       system_prompt TEXT,
       default_model TEXT,
       mcp_config TEXT,
@@ -33,6 +34,10 @@ describe('Database schema and CRUD', () => {
       provider TEXT,
       token_usage TEXT,
       starred INTEGER DEFAULT 0,
+      sandbox_mode INTEGER DEFAULT 0,
+      queue_mode TEXT DEFAULT 'steer',
+      summary TEXT,
+      parent_conversation_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )`)
@@ -47,7 +52,8 @@ describe('Database schema and CRUD', () => {
       tokens_used INTEGER,
       parent_message_id TEXT,
       branch_id TEXT,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      tool_call_id TEXT
     )`)
     sqlite.run(`CREATE TABLE IF NOT EXISTS personas (
       id TEXT PRIMARY KEY NOT NULL,

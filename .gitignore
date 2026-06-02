@@ -5,6 +5,12 @@ dist/
 .env
 .kilo/
 resources/
+!resources/
+resources/*
+!resources/icon.png
+!resources/icon.ico
+!resources/icon-512.png
+!resources/icon-256.png
 NUL
 tsconfig.tsbuildinfo
 

@@ -64,14 +64,38 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 }
 
 function splitToolActivity(content: string) {
-  const toolLinePattern = /^(?:[*_`>\s]*)?(?:Using\s+(?:local__|tool)|local__[\w_]*\s(?:is\s+)?(?:running|finished)\.?)/i
+  const toolLinePattern = /^(?:[*_`>\s]*)?(?:Using\s+(?:local__|tool|\w+\.{2,})|(?:local__|mcp__|web__)[\w_]*\s(?:is\s+)?(?:running|finished)\.?|(?:glob|grep|read_file|search_files|list_files|write_file)\s+finished\.?)/i
   const toolLines: string[] = []
   const discussionLines: string[] = []
+  let cleanedContent = content
 
-  for (const line of content.split('\n')) {
+  const longcatBlocks = cleanedContent.match(/<longcat_tool_call[\s\S]*?<\/longcat_tool_call>/gi) ?? []
+  for (const block of longcatBlocks) {
+    const toolName = block.match(/<longcat_tool_name>\s*([\s\S]*?)\s*<\/longcat_tool_name>/i)?.[1]?.trim()
+    const argKeys = [...block.matchAll(/<longcat_arg_key>\s*([\s\S]*?)\s*<\/longcat_arg_key>/gi)].map((m) => m[1].trim())
+    const argValues = [...block.matchAll(/<longcat_arg_value>\s*([\s\S]*?)\s*<\/longcat_arg_value>/gi)].map((m) => m[1].trim())
+    const args = argKeys
+      .map((key, index) => `${key}: ${argValues[index] ?? ''}`)
+      .filter(Boolean)
+      .join(', ')
+
+    toolLines.push(`${toolName || 'tool'}${args ? ` (${args})` : ''}`)
+  }
+
+  cleanedContent = cleanedContent
+    .replace(/<longcat_tool_call[\s\S]*?<\/longcat_tool_call>/gi, '\n')
+    .replace(/<\/?longcat_[^>]+>/gi, ' ')
+
+  for (const line of cleanedContent.split('\n')) {
     const trimmed = line.trim()
     const normalized = trimmed.replace(/^[*_`>\s]+|[*_`\s]+$/g, '')
-    if (toolLinePattern.test(normalized)) {
+    if (!normalized) {
+      discussionLines.push(line)
+    } else if (
+      toolLinePattern.test(normalized) ||
+      /(?:local__|mcp__|web__)[\w_]+/.test(normalized) ||
+      /<\/?longcat_/i.test(normalized)
+    ) {
       toolLines.push(normalized)
     } else {
       discussionLines.push(line)
@@ -89,7 +113,7 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
   const [editContent, setEditContent] = useState(message.content)
   const [copied, setCopied] = useState(false)
   const { updateStreamingMessage } = useChatStore()
-  const { selectedModel } = useProviderStore()
+  const { selectedModel, customProviders } = useProviderStore()
   const { setActiveArtifactId, toggleArtifactPanel } = useUIStore()
 
   const isUser = message.role === 'user'
@@ -98,8 +122,16 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
     if (!isAssistant) {
       return { discussion: message.content, toolLines: [] as string[] }
     }
-    return splitToolActivity(message.content)
-  }, [isAssistant, message.content])
+    const splitMessage = splitToolActivity(message.content)
+    const toolCallLines = (message.toolCalls ?? []).map((toolCall: any) => {
+      const rawArgs = typeof toolCall.arguments === 'string' ? toolCall.arguments : JSON.stringify(toolCall.arguments ?? {})
+      return `${toolCall.name ?? 'tool'} ${rawArgs}`
+    })
+    return {
+      discussion: splitMessage.discussion,
+      toolLines: [...toolCallLines, ...splitMessage.toolLines],
+    }
+  }, [isAssistant, message.content, message.toolCalls])
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(message.content)
@@ -156,17 +188,18 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
     }
 
     return (
-      <div className="prose prose-sm dark:prose-invert max-w-none">
+      <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-headings:mt-4 prose-headings:mb-2">
         {renderedMessage.toolLines.length > 0 && (
           <details
-            className="not-prose mb-3 rounded-lg border border-outline-variant/20 bg-surface-container-low/10 px-3 py-1.5 text-[11px] text-on-surface-variant/35"
+            className="not-prose mb-3 rounded-lg border border-outline-variant/50 bg-surface-container-low/60 hover:border-outline-variant transition-colors duration-200 px-3 py-2 text-[12px] text-on-surface-variant"
           >
-            <summary className="cursor-pointer select-none text-on-surface-variant/40">
-              Tool activity ({renderedMessage.toolLines.length})
+            <summary className="cursor-pointer select-none font-medium flex items-center gap-2 text-on-surface/85 hover:text-on-surface transition-colors duration-150">
+              <span className="material-symbols-outlined text-[16px] text-primary">manufacturing</span>
+              Execution Details ({renderedMessage.toolLines.length} steps)
             </summary>
-            <div className="mt-2 space-y-1 font-mono italic opacity-70">
+            <div className="mt-2 pl-4 space-y-1.5 font-mono text-[11px] border-l border-primary/25 text-on-surface-variant">
               {renderedMessage.toolLines.map((line, index) => (
-                <div key={`${line}-${index}`} className="truncate">
+                <div key={`${line}-${index}`} className="break-all whitespace-pre-wrap">
                   {line}
                 </div>
               ))}
@@ -183,9 +216,16 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
                 return <CodeBlock language={match[1]} code={codeString} />
               }
               return (
-                <code className="font-mono text-[14px] bg-surface-container px-1.5 py-0.5 rounded text-secondary-fixed" {...props}>
+                <code className="font-mono text-[0.92em] bg-tertiary-fixed text-on-tertiary-fixed border border-tertiary-fixed-dim/60 px-1.5 py-0.5 rounded-md" {...props}>
                   {children}
                 </code>
+              )
+            },
+            a({ href, children, ...props }: any) {
+              return (
+                <a href={href} target="_blank" rel="noreferrer" {...props}>
+                  {children}
+                </a>
               )
             },
           }}
@@ -200,14 +240,14 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
   }
 
   return (
-    <div className="flex gap-4 max-w-4xl mx-auto">
+    <div className="flex gap-3 max-w-5xl mx-auto w-full">
       {/* Avatar */}
       {isUser ? (
-        <div className="w-8 h-8 rounded-full flex-shrink-0 bg-surface-container border border-outline-variant overflow-hidden flex items-center justify-center">
+        <div className="w-7 h-7 rounded-full flex-shrink-0 bg-surface-container border border-outline-variant overflow-hidden flex items-center justify-center">
           <span className="material-symbols-outlined text-[16px] text-on-surface-variant">person</span>
         </div>
       ) : (
-        <div className="w-8 h-8 rounded-lg flex-shrink-0 bg-secondary-container/20 border border-secondary-container/30 flex items-center justify-center text-secondary-container">
+        <div className="w-7 h-7 rounded-md flex-shrink-0 bg-secondary-container/20 border border-secondary-container/30 flex items-center justify-center text-secondary-container">
           <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 1" }}>
             memory
           </span>
@@ -223,7 +263,12 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
           {!isUser && (
             <span className="text-[12px] text-on-surface-variant flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-secondary-container"></span>
-              {selectedModel ? `${selectedModel.provider}: ${selectedModel.name}` : 'No model selected'}
+              {selectedModel
+                ? `${selectedModel.customProviderId
+                    ? (customProviders.find((p) => p.id === selectedModel.customProviderId)?.name ?? 'Custom')
+                    : selectedModel.provider
+                  }: ${selectedModel.name}`
+                : 'No model selected'}
             </span>
           )}
           <span className="text-[12px] text-on-surface-variant/70">
@@ -233,11 +278,11 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
 
         {/* Content */}
         {isUser ? (
-          <div className="text-[16px] leading-relaxed text-on-surface bg-surface-container-low p-4 rounded-xl border border-surface-container-high inline-block max-w-[85%]">
+          <div className="text-[15px] leading-7 text-on-surface bg-surface-container-low px-4 py-3 rounded-2xl border border-surface-container-high inline-block max-w-[78%]">
             {renderContent()}
           </div>
         ) : (
-          <div className="text-[16px] leading-relaxed text-on-surface">
+          <div className="text-[15px] leading-7 text-on-surface">
             {renderContent()}
           </div>
         )}

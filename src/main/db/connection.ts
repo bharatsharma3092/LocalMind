@@ -36,11 +36,12 @@ export function runMigrations(): void {
   )
 
   if (tableCheck.length === 0) {
-    // Create all tables from schema
+    // Create all tables from schema (Fresh install)
     const tables = [
       `CREATE TABLE IF NOT EXISTS workspaces (
         id TEXT PRIMARY KEY NOT NULL,
         name TEXT NOT NULL,
+        root_path TEXT,
         system_prompt TEXT,
         default_model TEXT,
         mcp_config TEXT,
@@ -56,6 +57,10 @@ export function runMigrations(): void {
         provider TEXT,
         token_usage TEXT,
         starred INTEGER DEFAULT 0,
+        sandbox_mode INTEGER DEFAULT 0,
+        queue_mode TEXT DEFAULT 'steer',
+        summary TEXT,
+        parent_conversation_id TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )`,
@@ -70,7 +75,8 @@ export function runMigrations(): void {
         tokens_used INTEGER,
         parent_message_id TEXT,
         branch_id TEXT,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        tool_call_id TEXT
       )`,
       `CREATE TABLE IF NOT EXISTS artifacts (
         id TEXT PRIMARY KEY NOT NULL,
@@ -146,11 +152,42 @@ export function runMigrations(): void {
         steps TEXT NOT NULL,
         created_at INTEGER NOT NULL
       )`,
+      `CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY NOT NULL,
+        kind TEXT NOT NULL,
+        content TEXT NOT NULL,
+        importance_score REAL DEFAULT 0.5,
+        source_conversation_id TEXT REFERENCES conversations(id),
+        enabled INTEGER DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS commitments (
+        id TEXT PRIMARY KEY NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL,
+        due_at INTEGER,
+        completed_at INTEGER,
+        source_conversation_id TEXT REFERENCES conversations(id),
+        source_message_id TEXT REFERENCES messages(id),
+        metadata_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
     ]
 
     for (const sql of tables) {
       sqlite.run(sql)
     }
+  }
+
+  // Idempotent column check for existing databases
+  const workspaceColumns = sqlite
+    .exec('PRAGMA table_info(workspaces)')[0]
+    ?.values.map((row: unknown[]) => String(row[1])) ?? []
+
+  if (!workspaceColumns.includes('root_path')) {
+    sqlite.run('ALTER TABLE workspaces ADD COLUMN root_path TEXT')
   }
 
   const conversationColumns = sqlite
@@ -160,6 +197,51 @@ export function runMigrations(): void {
   if (!conversationColumns.includes('persona_id')) {
     sqlite.run('ALTER TABLE conversations ADD COLUMN persona_id TEXT')
   }
+  if (!conversationColumns.includes('sandbox_mode')) {
+    sqlite.run('ALTER TABLE conversations ADD COLUMN sandbox_mode INTEGER DEFAULT 0')
+  }
+  if (!conversationColumns.includes('queue_mode')) {
+    sqlite.run("ALTER TABLE conversations ADD COLUMN queue_mode TEXT DEFAULT 'steer'")
+  }
+  if (!conversationColumns.includes('summary')) {
+    sqlite.run('ALTER TABLE conversations ADD COLUMN summary TEXT')
+  }
+  if (!conversationColumns.includes('parent_conversation_id')) {
+    sqlite.run('ALTER TABLE conversations ADD COLUMN parent_conversation_id TEXT')
+  }
+
+  const messageColumns = sqlite
+    .exec('PRAGMA table_info(messages)')[0]
+    ?.values.map((row: unknown[]) => String(row[1])) ?? []
+
+  if (!messageColumns.includes('tool_call_id')) {
+    sqlite.run('ALTER TABLE messages ADD COLUMN tool_call_id TEXT')
+  }
+
+  // Create memories and commitments table if missing for existing databases
+  sqlite.run(`CREATE TABLE IF NOT EXISTS memories (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL,
+    importance_score REAL DEFAULT 0.5,
+    source_conversation_id TEXT REFERENCES conversations(id),
+    enabled INTEGER DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+
+  sqlite.run(`CREATE TABLE IF NOT EXISTS commitments (
+    id TEXT PRIMARY KEY NOT NULL,
+    description TEXT NOT NULL,
+    status TEXT NOT NULL,
+    due_at INTEGER,
+    completed_at INTEGER,
+    source_conversation_id TEXT REFERENCES conversations(id),
+    source_message_id TEXT REFERENCES messages(id),
+    metadata_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
 
   sqlite.run(`CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY NOT NULL,

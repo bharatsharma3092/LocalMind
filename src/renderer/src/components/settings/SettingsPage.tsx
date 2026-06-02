@@ -9,7 +9,26 @@ type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' 
 type WebSearchProvider = 'tavily' | 'serper' | 'exa' | 'duckduckgo'
 type SettingsTab = 'general' | 'profile' | 'memory' | 'models' | 'claudeProxy' | 'mcp' | 'personas' | 'data'
 type MemoryEntry = { id: string; content: string; source: string; enabled: boolean; createdAt: number }
+type ShortTermMemoryEntry = { id: string; content: string; sourceConversationId?: string; createdAt: number }
 type ProxyRole = 'opus' | 'sonnet' | 'haiku'
+type MemorySection = 'Personal' | 'Professional' | 'Skills' | 'Interests'
+
+const memorySections: MemorySection[] = ['Personal', 'Professional', 'Skills', 'Interests']
+const memorySectionAliases: Record<string, MemorySection> = {
+  personal: 'Personal',
+  profile: 'Personal',
+  about: 'Personal',
+  professional: 'Professional',
+  profession: 'Professional',
+  work: 'Professional',
+  career: 'Professional',
+  skills: 'Skills',
+  skill: 'Skills',
+  capabilities: 'Skills',
+  interests: 'Interests',
+  interest: 'Interests',
+  hobbies: 'Interests',
+}
 
 const colorOptions: { id: ColorTheme; label: string; hex: string }[] = [
   { id: 'default', label: 'Indigo', hex: '#6c5ce7' },
@@ -68,6 +87,7 @@ export function SettingsPage({
   const [authProvider, setAuthProvider] = useState<'local' | 'google' | 'github' | 'microsoft' | null>(null)
   const [memoryEnabled, setMemoryEnabled] = useState(true)
   const [memories, setMemories] = useState<MemoryEntry[]>([])
+  const [shortTermMemories, setShortTermMemories] = useState<ShortTermMemoryEntry[]>([])
   const [memoryDraft, setMemoryDraft] = useState('')
   const [memoryImportText, setMemoryImportText] = useState('')
   const [memoryStatus, setMemoryStatus] = useState('')
@@ -75,10 +95,12 @@ export function SettingsPage({
   const [editingProvider, setEditingProvider] = useState<CustomProviderConfig | null>(null)
   const [newProviderName, setNewProviderName] = useState('')
   const [newProviderUrl, setNewProviderUrl] = useState('http://localhost:8080/v1')
+  const [newProviderFormat, setNewProviderFormat] = useState<'openai' | 'anthropic'>('openai')
   const [newProviderKey, setNewProviderKey] = useState('')
   const [newModelId, setNewModelId] = useState('')
   const [newModelName, setNewModelName] = useState('')
-  const [fetchedModels, setFetchedModels] = useState<{ id: string; name: string; selected: boolean }[]>([])
+  const [newModelContext, setNewModelContext] = useState('128000')
+  const [fetchedModels, setFetchedModels] = useState<{ id: string; name: string; selected: boolean; contextWindow?: number }[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
   const [modelFetchStatus, setModelFetchStatus] = useState('')
   const [claudeProxy, setClaudeProxy] = useState<any>({ enabled: false, port: 4000, apiKey: 'localmind-proxy-key' })
@@ -124,6 +146,9 @@ export function SettingsPage({
     })
     window.localmind.settings.get('memories').then((r) => {
       if (r.success && Array.isArray(r.data)) setMemories(r.data)
+    })
+    window.localmind.settings.get('shortTermMemories').then((r) => {
+      if (r.success && Array.isArray(r.data)) setShortTermMemories(r.data)
     })
     window.localmind.claudeProxy?.getSettings?.().then((r) => {
       if (r.success && r.data) setClaudeProxy(r.data)
@@ -171,13 +196,16 @@ export function SettingsPage({
       id: generateId(),
       name: '',
       baseUrl: 'http://localhost:8080/v1',
+      apiFormat: 'openai',
       models: [],
     })
     setNewProviderName('')
     setNewProviderUrl('http://localhost:8080/v1')
+    setNewProviderFormat('openai')
     setNewProviderKey('')
     setNewModelId('')
     setNewModelName('')
+    setNewModelContext('128000')
     setFetchedModels([])
     setModelFetchStatus('')
   }
@@ -186,9 +214,11 @@ export function SettingsPage({
     setEditingProvider({ ...cp })
     setNewProviderName(cp.name)
     setNewProviderUrl(cp.baseUrl)
+    setNewProviderFormat(cp.apiFormat ?? 'openai')
     setNewProviderKey('')
     setNewModelId('')
     setNewModelName('')
+    setNewModelContext('128000')
     setFetchedModels([])
     setModelFetchStatus('')
     window.localmind.secrets.get(`custom-provider-${cp.id}-api-key`).then((r) => {
@@ -200,7 +230,11 @@ export function SettingsPage({
     if (!editingProvider || !newProviderName.trim()) return
     const selectedFetchedModels = fetchedModels
       .filter((model) => model.selected)
-      .map((model) => ({ id: model.id, name: model.name || model.id }))
+      .map((model) => ({
+        id: model.id,
+        name: model.name || model.id,
+        contextWindow: model.contextWindow,
+      }))
     const fetchedIds = new Set(fetchedModels.map((model) => model.id))
     const mergedModels = [...selectedFetchedModels]
     for (const model of editingProvider.models) {
@@ -212,6 +246,7 @@ export function SettingsPage({
       ...editingProvider,
       name: newProviderName.trim(),
       baseUrl: newProviderUrl.trim() || 'http://localhost:8080/v1',
+      apiFormat: newProviderFormat,
       models: mergedModels,
     }
     if (newProviderKey) {
@@ -238,7 +273,12 @@ export function SettingsPage({
 
   const addModelToEditing = async () => {
     if (!editingProvider || !newModelId.trim()) return
-    const model = { id: newModelId.trim(), name: newModelName.trim() || newModelId.trim() }
+    const contextVal = parseInt(newModelContext.trim(), 10) || 128000
+    const model = {
+      id: newModelId.trim(),
+      name: newModelName.trim() || newModelId.trim(),
+      contextWindow: contextVal,
+    }
     const updated: CustomProviderConfig = {
       ...editingProvider,
       models: [...editingProvider.models, model],
@@ -246,6 +286,7 @@ export function SettingsPage({
     setEditingProvider(updated)
     setNewModelId('')
     setNewModelName('')
+    setNewModelContext('128000')
     const existing = customProviders.findIndex((p) => p.id === updated.id)
     const newList = [...customProviders]
     if (existing >= 0) {
@@ -261,9 +302,10 @@ export function SettingsPage({
     setModelFetchStatus('')
     try {
       const res = await window.localmind.llm.fetchCustomModels({
-        baseUrl: newProviderUrl.trim(),
-        apiKey: newProviderKey.trim() || undefined,
-      })
+      baseUrl: newProviderUrl.trim(),
+      apiKey: newProviderKey.trim() || undefined,
+      apiFormat: newProviderFormat,
+    })
       if (!res.success || !res.data) {
         setModelFetchStatus(res.error ?? 'Unable to fetch models.')
         return
@@ -344,6 +386,70 @@ export function SettingsPage({
     await window.localmind.settings.set('memoryEnabled', nextEnabled)
   }
 
+  const clearShortTermMemories = async () => {
+    setShortTermMemories([])
+    await window.localmind.settings.set('shortTermMemories', [])
+  }
+
+  const detectMemorySection = (line: string): MemorySection | null => {
+    const cleaned = line
+      .trim()
+      .replace(/^#{1,6}\s*/, '')
+      .replace(/^\s*[-*]\s*/, '')
+      .replace(/^[^A-Za-z0-9]+/, '')
+      .replace(/[:：]\s*$/, '')
+      .trim()
+      .toLowerCase()
+    return memorySectionAliases[cleaned] ?? null
+  }
+
+  const formatSectionMemory = (section: MemorySection, lines: string[]): string => {
+    const body = lines
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/^\[[^\]]+\]\s*-\s*/, '').replace(/^\s*[-*]\s*/, '').trim())
+      .filter(Boolean)
+      .map((line) => `- ${line}`)
+      .join('\n')
+    return `${section}\n${body}`.trim()
+  }
+
+  const parseSectionedMemories = (text: string): MemoryEntry[] => {
+    const grouped = new Map<MemorySection, string[]>()
+    let activeSection: MemorySection | null = null
+
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('```')) continue
+
+      const section = detectMemorySection(line)
+      if (section) {
+        activeSection = section
+        if (!grouped.has(section)) grouped.set(section, [])
+        continue
+      }
+
+      if (activeSection) {
+        grouped.set(activeSection, [...(grouped.get(activeSection) ?? []), line])
+      }
+    }
+
+    return memorySections
+      .map((section) => {
+        const lines = grouped.get(section) ?? []
+        const content = formatSectionMemory(section, lines)
+        if (!content || content === section) return null
+        return {
+          id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+          content,
+          source: `import:${section.toLowerCase()}`,
+          enabled: true,
+          createdAt: Date.now(),
+        }
+      })
+      .filter(Boolean) as MemoryEntry[]
+  }
+
   const addMemory = async (content: string, source = 'manual') => {
     const cleaned = content.trim()
     if (!cleaned) return
@@ -362,28 +468,23 @@ export function SettingsPage({
   }
 
   const importMemoriesFromText = async () => {
-    const entries = memoryImportText
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith('```'))
-      .map((line) => line.replace(/^\[[^\]]+\]\s*-\s*/, '').replace(/^\s*[-*]\s*/, '').trim())
-      .filter(Boolean)
+    const imported = parseSectionedMemories(memoryImportText)
 
-    if (entries.length === 0) {
-      setMemoryStatus('Paste exported memory text first.')
+    if (imported.length === 0) {
+      setMemoryStatus('No sectioned memories found. Use Personal, Professional, Skills, or Interests headings.')
       return
     }
 
-    const imported = entries.map((content) => ({
-      id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-      content,
-      source: 'import',
-      enabled: true,
-      createdAt: Date.now(),
-    }))
-    await saveMemories([...imported, ...memories])
+    const importedSections = new Set(imported.map((memory) => memory.source.replace('import:', '')))
+    const remaining = memories.filter((memory) => {
+      const sourceSection = memory.source.startsWith('import:') ? memory.source.replace('import:', '') : ''
+      const title = memory.content.split(/\r?\n/, 1)[0]?.trim().toLowerCase()
+      return !importedSections.has(sourceSection) && !importedSections.has(title)
+    })
+
+    await saveMemories([...imported, ...remaining])
     setMemoryImportText('')
-    setMemoryStatus(`Imported ${imported.length} memories.`)
+    setMemoryStatus(`Imported ${imported.length} section${imported.length === 1 ? '' : 's'}.`)
   }
 
   const importMemoryFile = async () => {
@@ -806,18 +907,48 @@ export function SettingsPage({
 
               <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
                 <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-on-surface">Recent task memory</h4>
+                    <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                      Personal Assistant keeps short-term notes about recent tasks it completed. These are local and capped automatically.
+                    </p>
+                  </div>
+                  <button
+                    onClick={clearShortTermMemories}
+                    disabled={shortTermMemories.length === 0}
+                    className="rounded-lg border border-outline-variant px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-error disabled:opacity-40"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {shortTermMemories.length === 0 ? (
+                    <p className="text-sm text-on-surface-variant">No recent task memories yet.</p>
+                  ) : shortTermMemories.slice(0, 10).map((memory) => (
+                    <div key={memory.id} className="rounded-lg border border-outline-variant/70 bg-surface-container px-3 py-2">
+                      <p className="whitespace-pre-wrap text-sm leading-6 text-on-surface">{memory.content}</p>
+                      <p className="mt-1 text-[11px] uppercase tracking-wider text-on-surface-variant/70">
+                        {new Date(memory.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
+                <div className="flex items-center justify-between gap-3">
                   <h4 className="text-sm font-semibold text-on-surface">Import from another AI app</h4>
                   <button onClick={importMemoryFile} className="rounded-lg border border-outline-variant px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-on-surface">
                     Load File
                   </button>
                 </div>
                 <p className="mt-2 text-xs leading-5 text-on-surface-variant">
-                  Paste exported memories from Claude, ChatGPT, Gemini, Copilot, or any assistant. Lines like “[date] - memory” are imported as separate entries.
+                  Paste memories under Personal, Professional, Skills, and Interests headings. Each heading is saved as one grouped memory section.
                 </p>
                 <textarea
                   value={memoryImportText}
                   onChange={(e) => setMemoryImportText(e.target.value)}
-                  placeholder="Paste exported memory text here..."
+                  placeholder={`Personal:\n- Your personal notes\n\nProfessional:\n- Your work context\n\nSkills:\n- Your tools and strengths\n\nInterests:\n- Topics you care about`}
                   rows={6}
                   className="mt-3 w-full resize-y rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
                 />
@@ -902,6 +1033,9 @@ export function SettingsPage({
                         </div>
                       </div>
                       <div className="text-xs text-on-surface-variant mt-1">{cp.baseUrl}</div>
+                      <div className="mt-1 text-[11px] uppercase tracking-wider text-on-surface-variant/70">
+                        {(cp.apiFormat ?? 'openai') === 'anthropic' ? 'Anthropic Messages API' : 'OpenAI Chat Completions API'}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -930,14 +1064,37 @@ export function SettingsPage({
                     </div>
 
                     <div>
+                      <label className="text-xs text-on-surface-variant">API Format</label>
+                      <select
+                        value={newProviderFormat}
+                        onChange={(e) => {
+                          const format = e.target.value as 'openai' | 'anthropic'
+                          setNewProviderFormat(format)
+                          if (format === 'anthropic' && newProviderUrl === 'http://localhost:8080/v1') {
+                            setNewProviderUrl('https://api.anthropic.com/v1')
+                          }
+                        }}
+                        className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm outline-none focus:border-secondary text-on-surface mt-1"
+                      >
+                        <option value="openai">OpenAI-compatible (/chat/completions)</option>
+                        <option value="anthropic">Anthropic-compatible (/messages)</option>
+                      </select>
+                    </div>
+
+                    <div>
                       <label className="text-xs text-on-surface-variant">Base URL</label>
                       <input
                         type="text"
                         value={newProviderUrl}
                         onChange={(e) => setNewProviderUrl(e.target.value)}
-                        placeholder="http://localhost:8080/v1"
+                        placeholder={newProviderFormat === 'anthropic' ? 'https://api.anthropic.com/v1' : 'http://localhost:8080/v1'}
                         className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm outline-none focus:border-secondary text-on-surface mt-1"
                       />
+                      <p className="mt-1 text-[11px] text-on-surface-variant/75">
+                        {newProviderFormat === 'anthropic'
+                          ? 'Uses GET /models and POST /messages with x-api-key and anthropic-version headers.'
+                          : 'Uses GET /models and POST /chat/completions with Authorization: Bearer.'}
+                      </p>
                     </div>
 
                     <div>
@@ -1016,6 +1173,11 @@ export function SettingsPage({
                                 className="h-4 w-4 accent-primary"
                               />
                               <span className="min-w-0 flex-1 truncate">{model.name || model.id}</span>
+                              {model.contextWindow != null && (
+                                <span className="text-[10px] bg-surface-container border border-outline-variant text-on-surface-variant/80 rounded px-1.5 py-0.5 font-mono mr-2">
+                                  {model.contextWindow >= 1000 ? `${Math.round(model.contextWindow / 1000)}k` : model.contextWindow} ctx
+                                </span>
+                              )}
                               <span className="truncate font-mono text-[11px] text-on-surface-variant/70">{model.id}</span>
                             </label>
                           ))}
@@ -1025,9 +1187,14 @@ export function SettingsPage({
                       <div className="space-y-1.5 mt-1 mb-2">
                         {editingProvider.models.map((m) => (
                           <div key={m.id} className="flex items-center justify-between bg-surface-container-low border border-outline-variant rounded-lg px-3 py-1.5">
-                            <div>
+                            <div className="flex items-center gap-2">
                               <span className="text-sm text-on-surface">{m.name}</span>
-                              <span className="text-xs text-on-surface-variant ml-2">{m.id}</span>
+                              <span className="text-xs text-on-surface-variant">{m.id}</span>
+                              {m.contextWindow != null && (
+                                <span className="text-[10px] bg-surface-container border border-outline-variant text-on-surface-variant/80 rounded px-1.5 py-0.5 font-mono">
+                                  {m.contextWindow >= 1000 ? `${Math.round(m.contextWindow / 1000)}k` : m.contextWindow} ctx
+                                </span>
+                              )}
                             </div>
                             <button
                               onClick={() => removeModelFromEditing(m.id)}
@@ -1056,6 +1223,14 @@ export function SettingsPage({
                           onChange={(e) => setNewModelName(e.target.value)}
                           placeholder="Display name"
                           className="w-32 bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm outline-none focus:border-secondary text-on-surface"
+                          onKeyDown={(e) => e.key === 'Enter' && addModelToEditing()}
+                        />
+                        <input
+                          type="text"
+                          value={newModelContext}
+                          onChange={(e) => setNewModelContext(e.target.value)}
+                          placeholder="Ctx (e.g. 128000)"
+                          className="w-24 bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2 text-sm outline-none focus:border-secondary text-on-surface"
                           onKeyDown={(e) => e.key === 'Enter' && addModelToEditing()}
                         />
                         <button
@@ -1126,14 +1301,19 @@ export function SettingsPage({
                         className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
                       >
                         <option value="">Choose a model</option>
-                        {availableModels.map((model) => (
-                          <option
-                            key={`${model.provider}-${model.customProviderId ?? ''}-${model.id}`}
-                            value={`${model.provider}|${model.customProviderId ?? ''}|${model.id}`}
-                          >
-                            {model.provider}{model.customProviderId ? `/${model.customProviderId}` : ''}: {model.name || model.id}
-                          </option>
-                        ))}
+                        {availableModels.map((model) => {
+                          const providerName = model.customProviderId
+                            ? (customProviders.find((p) => p.id === model.customProviderId)?.name ?? 'Custom')
+                            : model.provider;
+                          return (
+                            <option
+                              key={`${model.provider}-${model.customProviderId ?? ''}-${model.id}`}
+                              value={`${model.provider}|${model.customProviderId ?? ''}|${model.id}`}
+                            >
+                              {providerName}: {model.name || model.id}
+                            </option>
+                          )
+                        })}
                       </select>
                     </div>
                   )

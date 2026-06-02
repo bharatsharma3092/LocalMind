@@ -3,8 +3,8 @@ import { extractFileContent } from '../files/extractor'
 import { searchWeb } from '../websearch/service'
 import type { ToolDefinition, ToolCall } from '@shared/types/localmind-api'
 import { execFile } from 'child_process'
-import { promises as fs } from 'fs'
-import { dirname, extname, join, relative, resolve } from 'path'
+import { promises as fs, existsSync, realpathSync } from 'fs'
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'path'
 import { promisify } from 'util'
 
 interface MCPToolEntry {
@@ -45,12 +45,46 @@ function getWorkspaceRoot(workspacePath?: string): string {
 }
 
 function resolveWorkspacePath(inputPath = '.', workspacePath?: string): string {
+  if (isAbsolute(inputPath)) {
+    return resolve(inputPath)
+  }
+
   const workspaceRoot = getWorkspaceRoot(workspacePath)
-  const resolved = resolve(workspaceRoot, inputPath)
-  const rel = relative(workspaceRoot, resolved)
+  
+  // Resolve realpath of workspace root to handle symlinks correctly
+  let realWorkspaceRoot = workspaceRoot
+  try {
+    if (existsSync(workspaceRoot)) {
+      realWorkspaceRoot = realpathSync(workspaceRoot)
+    }
+  } catch {}
+
+  const resolved = resolve(realWorkspaceRoot, inputPath)
+
+  // Robust Write-Path Symlink Checking: climb up to find the nearest existing parent
+  let checkPath = resolved
+  while (checkPath && checkPath !== dirname(checkPath)) {
+    if (existsSync(checkPath)) {
+      try {
+        const realCheckPath = realpathSync(checkPath)
+        const rel = relative(realWorkspaceRoot, realCheckPath)
+        if (rel.startsWith('..') || resolve(rel) === realCheckPath) {
+          throw new Error(`Path resolves outside the workspace boundary: ${inputPath}`)
+        }
+      } catch (err) {
+        throw new Error(`Path validation failed: ${inputPath} (${(err as Error).message})`)
+      }
+      break
+    }
+    checkPath = dirname(checkPath)
+  }
+
+  // Fallback relative boundary validation
+  const rel = relative(realWorkspaceRoot, resolved)
   if (rel.startsWith('..') || resolve(rel) === resolved) {
     throw new Error(`Path is outside the workspace: ${inputPath}`)
   }
+
   return resolved
 }
 
@@ -124,12 +158,12 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'local__read_file',
-        description: 'Read a file from the current workspace. Supports text, PDF, DOCX, PPTX, and XLSX extraction.',
+        description: 'Read a file. Supports reading from both workspace-relative paths and system-wide absolute paths. Supports text, PDF, DOCX, PPTX, and XLSX extraction.',
         parameters: {
           type: 'object',
           required: ['path'],
           properties: {
-            path: { type: 'string', description: 'Workspace-relative file path.' },
+            path: { type: 'string', description: 'Workspace-relative file path or system-wide absolute file path.' },
             startLine: { type: 'number', description: '1-based starting line. Defaults to 1.' },
             maxLines: { type: 'number', description: 'Maximum lines to return. Defaults to 200.' },
           },
@@ -179,6 +213,90 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
           properties: {
             path: { type: 'string', description: 'Workspace-relative file path.' },
             content: { type: 'string', description: 'Complete file content to write.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__write_spreadsheet',
+        description: 'Create or replace an Excel spreadsheet (.xlsx) with a 2D array of data (rows and columns).',
+        parameters: {
+          type: 'object',
+          required: ['path', 'data'],
+          properties: {
+            path: { type: 'string', description: 'Workspace-relative file path ending in .xlsx.' },
+            data: { type: 'array', items: { type: 'array', items: { type: 'string' } }, description: 'A 2D array representing rows and columns of data.' },
+            sheetName: { type: 'string', description: 'Optional sheet name. Defaults to Sheet1.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__append_spreadsheet',
+        description: 'Append rows to an existing sheet in an Excel spreadsheet (.xlsx). Creates the file if it does not exist.',
+        parameters: {
+          type: 'object',
+          required: ['path', 'data'],
+          properties: {
+            path: { type: 'string', description: 'Workspace-relative file path ending in .xlsx.' },
+            data: { type: 'array', items: { type: 'array', items: { type: 'string' } }, description: 'A 2D array representing rows to append.' },
+            sheetName: { type: 'string', description: 'Optional sheet name. Defaults to Sheet1.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__write_document',
+        description: 'Create or replace a Word document (.docx) with structured elements (headings, paragraphs, lists).',
+        parameters: {
+          type: 'object',
+          required: ['path', 'elements'],
+          properties: {
+            path: { type: 'string', description: 'Workspace-relative file path ending in .docx.' },
+            elements: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['type', 'text'],
+                properties: {
+                  type: { type: 'string', enum: ['paragraph', 'heading1', 'heading2', 'list_item'] },
+                  text: { type: 'string' },
+                },
+              },
+              description: 'Structured elements of the document.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__append_document',
+        description: 'Append structured elements (headings, paragraphs, lists) to an existing Word document (.docx). Creates the file if it does not exist.',
+        parameters: {
+          type: 'object',
+          required: ['path', 'elements'],
+          properties: {
+            path: { type: 'string', description: 'Workspace-relative file path ending in .docx.' },
+            elements: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['type', 'text'],
+                properties: {
+                  type: { type: 'string', enum: ['paragraph', 'heading1', 'heading2', 'list_item'] },
+                  text: { type: 'string' },
+                },
+              },
+              description: 'Structured elements to append.',
+            },
           },
         },
       },
@@ -478,6 +596,42 @@ export async function executeLocalToolCall(
       return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), bytes: Buffer.byteLength(String(args.content ?? ''), 'utf-8') }), toolCallId: toolCall.id }
     }
 
+    if (toolCall.name === 'local__write_spreadsheet') {
+      const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
+      const data = args.data as any[][]
+      if (!data || !Array.isArray(data)) throw new Error('data must be a 2D array')
+      const { writeXlsx } = await import('../files/rich-writer')
+      await writeXlsx(filePath, data, args.sheetName)
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__append_spreadsheet') {
+      const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
+      const data = args.data as any[][]
+      if (!data || !Array.isArray(data)) throw new Error('data must be a 2D array')
+      const { appendXlsx } = await import('../files/rich-writer')
+      await appendXlsx(filePath, data, args.sheetName)
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__write_document') {
+      const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
+      const elements = args.elements as any[]
+      if (!elements || !Array.isArray(elements)) throw new Error('elements must be an array')
+      const { writeDocx } = await import('../files/rich-writer')
+      await writeDocx(filePath, elements)
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__append_document') {
+      const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
+      const elements = args.elements as any[]
+      if (!elements || !Array.isArray(elements)) throw new Error('elements must be an array')
+      const { appendDocx } = await import('../files/rich-writer')
+      await appendDocx(filePath, elements)
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true }), toolCallId: toolCall.id }
+    }
+
     if (toolCall.name === 'local__edit_file') {
       const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
       const oldText = String(args.oldText ?? '')
@@ -514,16 +668,36 @@ export async function executeLocalToolCall(
     }
 
     if (toolCall.name === 'local__run_npm_script') {
+      if (!approvalHandler || !(await approvalHandler(toolCall.name, args))) {
+        return {
+          role: 'tool',
+          content: JSON.stringify({ error: 'NPM script execution was denied by the user' }),
+          toolCallId: toolCall.id,
+        }
+      }
+
       const workspaceRoot = getWorkspaceRoot(workspacePath)
       const packageJsonPath = resolveWorkspacePath('package.json', workspacePath)
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'))
       const script = String(args.script ?? '')
       if (!packageJson.scripts?.[script]) throw new Error(`npm script not found: ${script}`)
+      
       const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+      
+      // Sanitized environment variables allowlist to prevent API key leaks
+      const envAllowlist = ['PATH', 'APPDATA', 'USERPROFILE', 'LANG', 'LC_ALL', 'TEMP', 'TMP', 'HOME', 'SystemRoot', 'COMSPEC']
+      const sanitizedEnv: Record<string, string> = {}
+      for (const key of envAllowlist) {
+        if (process.env[key] !== undefined) {
+          sanitizedEnv[key] = process.env[key]!
+        }
+      }
+
       const result = await execFileAsync(npmCommand, ['run', script], {
         cwd: workspaceRoot,
-        timeout: 120000,
+        timeout: 120000, // 2 minutes hard limit
         maxBuffer: 1024 * 1024,
+        env: sanitizedEnv,
       })
       return { role: 'tool', content: JSON.stringify({ stdout: result.stdout, stderr: result.stderr }), toolCallId: toolCall.id }
     }

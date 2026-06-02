@@ -15,6 +15,8 @@ const log = {
   error: (fn: string, msg: string, data?: unknown) => console.error(`[ChatInput][${fn}] [ERROR] ${msg}`, data !== undefined ? data : ''),
 }
 
+let sessionWebSearchActive = false
+
 
 interface AttachedContext {
   id: string
@@ -28,11 +30,12 @@ interface Props {
   disabled?: boolean
   isLanding?: boolean
   forcedAgent?: Agent | null
+  planningEnabled?: boolean
   workspacePath?: string | null
   compactTools?: boolean
 }
 
-export function ChatInput({ conversationId, disabled = false, isLanding = false, forcedAgent = null, workspacePath = null, compactTools = false }: Props) {
+export function ChatInput({ conversationId, disabled = false, isLanding = false, forcedAgent = null, planningEnabled = false, workspacePath = null, compactTools = false }: Props) {
   const [input, setInput] = useState('')
   const [showSkillLauncher, setShowSkillLauncher] = useState(false)
   const [showSkillCreator, setShowSkillCreator] = useState(false)
@@ -43,7 +46,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
   const [showUrlInput, setShowUrlInput] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [fetchingUrl, setFetchingUrl] = useState(false)
-  const [webSearchActive, setWebSearchActive] = useState(false)
+  const [webSearchActive, setWebSearchActive] = useState(sessionWebSearchActive)
   const [searching, setSearching] = useState(false)
   const [autoRefinePrompt, setAutoRefinePrompt] = useState(false)
   const [refiningPrompt, setRefiningPrompt] = useState(false)
@@ -60,6 +63,14 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
   const { startStream, cancelStream } = useStreaming()
   const { webSearchEnabled } = useSettingsStore()
   const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
+
+  const toggleWebSearch = useCallback(() => {
+    setWebSearchActive((active) => {
+      const next = !active
+      sessionWebSearchActive = next
+      return next
+    })
+  }, [])
 
 
   useEffect(() => {
@@ -320,7 +331,6 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
         console.error('[WebSearch] Search failed', err)
       } finally {
         setSearching(false)
-        setWebSearchActive(false)
       }
     }
 
@@ -333,10 +343,15 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     const allMessages = useChatStore.getState().messages[currentConvId] ?? []
     const llmMessages = allMessages
       .filter((m) => !m.isStreaming)
-      .map((m) => ({
-        role: m.role as 'system' | 'user' | 'assistant',
-        content: m.content,
-      }))
+      .map((m) => {
+        const msg: any = {
+          role: m.role,
+          content: m.content,
+        }
+        if (m.toolCalls) msg.toolCalls = m.toolCalls
+        if (m.toolCallId) msg.toolCallId = m.toolCallId
+        return msg
+      })
 
     const request: LLMRequest = {
       messages: llmMessages,
@@ -344,6 +359,8 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
       provider: (selectedModel?.provider as any) ?? 'ollama',
       customProviderId: selectedModel?.customProviderId,
       agentId: forcedAgent?.id,
+      conversationId: currentConvId,
+      planningEnabled: !!forcedAgent && planningEnabled,
       workspacePath: workspacePath ?? undefined,
       personaId: personaIdForRequest ?? undefined,
       personaVariables: {
@@ -354,7 +371,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     }
 
     await startStream(currentConvId, request)
-  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId, forcedAgent, workspacePath, autoRefinePrompt, webSearchActive, webSearchEnabled])
+  }, [input, isStreaming, conversationId, disabled, selectedModel, addMessage, startStream, attachedContexts, isLanding, createConversation, conversations, draftPersonaId, forcedAgent, planningEnabled, workspacePath, autoRefinePrompt, webSearchActive, webSearchEnabled])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -384,14 +401,14 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
   const isInert = isStreaming || (!isLanding && disabled)
 
   const wrapperClass = isLanding
-    ? 'w-full py-6 px-6'
-    : 'absolute bottom-0 left-0 w-full bg-gradient-to-t from-background via-background to-transparent pt-10 pb-6 px-6 z-10'
+    ? 'w-full py-4 px-4'
+    : 'absolute bottom-0 left-0 w-full bg-gradient-to-t from-background via-background to-transparent pt-8 pb-4 px-4 z-10'
 
   return (
     <div className={wrapperClass}>
-      <div className="max-w-4xl mx-auto relative group">
+      <div className="max-w-5xl mx-auto relative group">
         {/* Glow */}
-        <div className="absolute -inset-0.5 bg-gradient-to-r from-secondary-container/50 to-primary-container/50 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-500"></div>
+        <div className="absolute -inset-0.5 bg-primary/15 rounded-2xl blur opacity-0 group-focus-within:opacity-40 transition duration-300"></div>
 
         {/* Skill Launcher */}
         {showSkillLauncher && (
@@ -456,7 +473,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
           </div>
         )}
 
-        <div className="relative bg-surface-container-low border border-surface-container-highest rounded-2xl p-2 shadow-lg focus-within:border-secondary/50 transition-colors duration-300 flex flex-col">
+        <div className="relative bg-surface-container-low border border-outline-variant/70 rounded-2xl p-2 shadow-sm focus-within:border-secondary/60 transition-colors duration-300 flex flex-col">
 
           {/* Attached contexts */}
           {attachedContexts.length > 0 && (
@@ -518,13 +535,13 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
               onKeyDown={handleKeyDown}
               placeholder={isInert ? (isLanding ? 'What can I help you with?' : 'Start a conversation first...') : 'Message LocalMind... Use / to trigger skills and, @ for commands'}
               rows={1}
-              className="w-full bg-transparent border-none text-on-surface placeholder:text-on-surface-variant/50 resize-none focus:ring-0 text-[16px] leading-relaxed pl-3 pr-12 py-2 min-h-[36px] max-h-[200px] overflow-y-auto"
+              className="w-full bg-transparent border-none text-on-surface placeholder:text-on-surface-variant/55 resize-none focus:ring-0 text-[15px] leading-6 pl-3 pr-12 py-2 min-h-[34px] max-h-[180px] overflow-y-auto"
               disabled={isInert || isCreatingConv}
             />
           </div>
 
           {/* Bottom Toolbar */}
-          <div className="flex items-center justify-between px-2 pb-1 pt-2 border-t border-surface-container-highest/50">
+          <div className="flex items-center justify-between px-2 pb-1 pt-1.5 border-t border-surface-container-highest/50">
             <div className="flex items-center gap-1 relative">
               {!compactTools && (
                 <>
@@ -628,40 +645,46 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
               />
 
               <div className="w-px h-4 bg-surface-container-highest mx-2"></div>
+              {/* Refine button (icon-only, neutral style) */}
               <button
                 onClick={() => setAutoRefinePrompt((value) => !value)}
                 disabled={isStreaming || isInert || refiningPrompt}
-                className={`px-2 py-1 rounded-md text-[12px] font-semibold flex items-center gap-1 transition-colors disabled:opacity-40 ${
+                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors disabled:opacity-40 ${
                   autoRefinePrompt
-                    ? 'bg-tertiary-container text-white border border-tertiary-container'
-                    : 'bg-tertiary/10 text-tertiary border border-tertiary/20 hover:bg-tertiary/20'
+                    ? 'text-on-surface bg-surface-container-highest border border-outline'
+                    : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high border border-outline-variant/30'
                 }`}
                 title="Refine your message with the selected model before answering"
               >
-                <span className="material-symbols-outlined text-[14px]">{refiningPrompt ? 'sync' : 'auto_fix_high'}</span>
-                {refiningPrompt ? 'Refining...' : 'Refine'}
+                <span className={`material-symbols-outlined text-[16px] ${refiningPrompt ? 'animate-spin' : ''}`}>
+                  {refiningPrompt ? 'sync' : 'auto_fix_high'}
+                </span>
               </button>
+
+              {/* WebSearch button (icon-only, standard globe logo) */}
               <button
-                onClick={() => setWebSearchActive(!webSearchActive)}
+                onClick={toggleWebSearch}
                 disabled={!webSearchEnabled || searching}
-                className={`px-2 py-1 rounded-md text-[12px] font-semibold flex items-center gap-1 transition-colors ${
+                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
                   webSearchActive && webSearchEnabled
                     ? 'bg-primary-container text-white border border-primary-container'
                     : 'bg-secondary/10 text-secondary border border-secondary/20 hover:bg-secondary/20'
                 } disabled:opacity-40`}
+                title="Search the web for up-to-date information"
               >
-                <span className="material-symbols-outlined text-[14px]">{searching ? 'sync' : 'psychology'}</span>
-                {searching ? 'Searching...' : '@WebSearch'}
+                <span className={`material-symbols-outlined text-[16px] ${searching ? 'animate-spin' : ''}`}>
+                  {searching ? 'sync' : 'language'}
+                </span>
               </button>
-              {/* MCP status badge */}
+
+              {/* MCP status badge (icon-only with a small active green pulsing indicator) */}
               {mcpServers.length > 0 && (
                 <div
-                  className="px-2 py-1 rounded-md text-[12px] font-semibold flex items-center gap-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                  title={`${mcpServers.length} MCP server${mcpServers.length > 1 ? 's' : ''} connected`}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center relative bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                  title={`${mcpServers.length} MCP server${mcpServers.length > 1 ? 's' : ''} connected (Active)`}
                 >
-                  <span className="material-symbols-outlined text-[14px]">extension</span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.6)]"></span>
-                  {mcpServers.length} MCP
+                  <span className="material-symbols-outlined text-[16px]">extension</span>
+                  <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border border-surface-container shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse"></span>
                 </div>
               )}
             </div>
@@ -687,7 +710,7 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
           </div>
         </div>
 
-        <div className="text-center mt-3 text-[12px] text-on-surface-variant/60">
+        <div className="text-center mt-2 text-[11px] text-on-surface-variant/60">
           LocalMind can make mistakes. Consider verifying important information.
         </div>
       </div>

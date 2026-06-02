@@ -11,6 +11,7 @@ import { createStreamId, initStreamBuffer, clearStreamBuffer, sendChunk, sendDon
 import { generateConversationTitle } from './llm/auto-title'
 import { countTokens } from './llm/token-counter'
 import type { LLMRequest, LLMStreamChunk } from './llm/types'
+import { extractContextWindow } from './llm/providers/custom'
 import type { ToolCall } from '@shared/types/localmind-api'
 import { mcpHostManager, type MCPServerConfig, reconnectSavedServers } from './mcp/host-manager'
 import { registerApprovalIpcHandlers } from './mcp/approval'
@@ -41,6 +42,23 @@ const activeStreams = new Map<string, AbortController>()
 const pendingAgentApprovals = new Map<string, (decision: string) => void>()
 
 const builtinAgents = [
+  {
+    id: 'personal-assistant',
+    name: 'Personal Assistant',
+    description: 'Your primary autonomous personal assistant. Connects to your workspaces, recalls memories, manages files, executes scripts, uses MCP servers, and tracks commitments.',
+    systemPrompt: [
+      'You are the LocalMind Personal Assistant, a local-first autonomous agent platform.',
+      'You operate over the user\'s active workspace and local computer environment. Utilize files, local script executions, web search, memory recall, and connected MCP servers to complete tasks autonomously.',
+      'Maintain a professional, concise, direct, and completely humble tone. Ground assertions strictly in observable data and facts.',
+      'Prioritize user safety and privacy above all else. Never execute privileged operations without explicit user approval.',
+    ].join('\n'),
+    icon: 'smart_toy',
+    category: 'Productivity',
+    enabled: true,
+    builtIn: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
   {
     id: 'cowork',
     name: 'Cowork',
@@ -82,12 +100,55 @@ const builtinAgents = [
 
 type LocalMindAgent = typeof builtinAgents[number]
 
-function getMemorySystemPrompt(): string | null {
-  const enabled = appStore.get('memoryEnabled') ?? true
-  if (!enabled) return null
+function normalizeMcpServerConfig(config: MCPServerConfig): MCPServerConfig {
+  const isFirecrawl =
+    config.id === 'mcp-firecrawl' ||
+    config.name?.toLowerCase() === 'firecrawl' ||
+    config.args?.some((arg) => /mcp-get-firecrawl|firecrawl-mcp/i.test(arg))
 
+  if (!isFirecrawl) return config
+
+  const apiKey = config.env?.FIRECRAWL_API_KEY?.trim()
+  const headers = {
+    ...(config.headers ?? {}),
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+  }
+
+  return {
+    ...config,
+    transport: 'streamable-http',
+    command: undefined,
+    args: undefined,
+    env: undefined,
+    url: 'https://mcp.firecrawl.dev/v2/mcp',
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
+  }
+}
+
+type StoredLongTermMemory = {
+  id: string
+  content: string
+  source: string
+  enabled: boolean
+  createdAt: number
+}
+
+type StoredShortTermMemory = {
+  id: string
+  content: string
+  sourceConversationId?: string
+  createdAt: number
+}
+
+function getMemorySystemPrompt(): string | null {
+  const memoryEnabled = appStore.get('memoryEnabled') ?? true
   const profile = appStore.get('userProfile') as any
-  const memories = ((appStore.get('memories') as any[]) ?? []).filter((memory) => memory?.enabled !== false && memory?.content?.trim())
+  const memories = memoryEnabled
+    ? ((appStore.get('memories') as any[]) ?? []).filter((memory) => memory?.enabled !== false && memory?.content?.trim())
+    : []
+  const shortTermMemories = memoryEnabled
+    ? ((appStore.get('shortTermMemories' as any) as StoredShortTermMemory[]) ?? []).filter((memory) => memory?.content?.trim())
+    : []
   const lines: string[] = []
 
   if (profile?.displayName?.trim()) {
@@ -97,18 +158,150 @@ function getMemorySystemPrompt(): string | null {
     lines.push(`The user's email is ${profile.email.trim()}.`)
   }
   if (memories.length > 0) {
-    lines.push('Stored user memory:')
+    lines.push('Long-term user memory:')
     for (const memory of memories.slice(0, 40)) {
+      lines.push(`- ${memory.content.trim()}`)
+    }
+  } else if (!memoryEnabled) {
+    lines.push('Stored user memory recall is currently turned off in LocalMind settings.')
+  }
+  if (shortTermMemories.length > 0) {
+    lines.push('Recent Personal Assistant task memory:')
+    for (const memory of shortTermMemories.slice(0, 12)) {
       lines.push(`- ${memory.content.trim()}`)
     }
   }
 
   if (lines.length === 0) return null
   return [
-    'Use this private LocalMind memory to personalize responses when relevant.',
+    'Use this private LocalMind profile and memory context to personalize responses when relevant.',
     'Do not reveal these stored details unless the user asks about memory or profile settings.',
+    'Never claim memory files are deleted or reset unless the provided context explicitly says so.',
     ...lines,
   ].join('\n')
+}
+
+function getLastUserText(messages: LLMRequest['messages']): string {
+  const message = [...messages].reverse().find((item) => item.role === 'user')
+  return typeof message?.content === 'string' ? message.content.trim() : ''
+}
+
+function parseMemoryJson(text: string): { shortTermTask?: string | null; longTermMemories?: string[] } {
+  const cleaned = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+  const match = cleaned.match(/\{[\s\S]*\}/)
+  if (!match) return {}
+  try {
+    const parsed = JSON.parse(match[0])
+    return {
+      shortTermTask: typeof parsed.shortTermTask === 'string' ? parsed.shortTermTask : null,
+      longTermMemories: Array.isArray(parsed.longTermMemories)
+        ? parsed.longTermMemories.filter((item: unknown) => typeof item === 'string')
+        : [],
+    }
+  } catch {
+    return {}
+  }
+}
+
+function addShortTermMemory(content: string, sourceConversationId?: string): void {
+  const cleaned = content.trim()
+  if (!cleaned) return
+
+  const current = ((appStore.get('shortTermMemories' as any) as StoredShortTermMemory[]) ?? [])
+    .filter((memory) => memory?.content?.trim())
+  const normalized = cleaned.toLowerCase()
+  const next = [
+    {
+      id: `stm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      content: cleaned,
+      sourceConversationId,
+      createdAt: Date.now(),
+    },
+    ...current.filter((memory) => memory.content.trim().toLowerCase() !== normalized),
+  ].slice(0, 30)
+
+  appStore.set('shortTermMemories' as any, next)
+}
+
+function addLongTermMemories(contents: string[]): void {
+  const cleanedItems = contents
+    .map((item) => item.trim().replace(/^\s*[-*]\s*/, ''))
+    .filter((item) => item.length >= 8)
+  if (cleanedItems.length === 0) return
+
+  const current = ((appStore.get('memories') as StoredLongTermMemory[]) ?? [])
+    .filter((memory) => memory?.content?.trim())
+  const seen = new Set(current.map((memory) => memory.content.trim().toLowerCase()))
+  const additions: StoredLongTermMemory[] = []
+
+  for (const content of cleanedItems) {
+    const normalized = content.toLowerCase()
+    if (seen.has(normalized)) continue
+    seen.add(normalized)
+    additions.push({
+      id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      content,
+      source: 'auto-long-term',
+      enabled: true,
+      createdAt: Date.now(),
+    })
+  }
+
+  if (additions.length > 0) {
+    appStore.set('memories', [...additions, ...current].slice(0, 100))
+  }
+}
+
+async function rememberPersonalAssistantTurn(request: LLMRequest, userPrompt: string, assistantResponse: string, toolNames: string[]): Promise<void> {
+  if (request.agentId !== 'personal-assistant') return
+  if (!(appStore.get('memoryEnabled') ?? true)) return
+  if (!userPrompt.trim() || !assistantResponse.trim()) return
+
+  const fallbackTask = `User asked: ${userPrompt.trim().slice(0, 180)}${userPrompt.trim().length > 180 ? '...' : ''}`
+  let shortTermTask: string | null = fallbackTask
+  let longTermMemories: string[] = []
+
+  try {
+    const extractPrompt = [
+      'You update LocalMind Personal Assistant memory after a completed turn.',
+      'Return strict JSON only with this shape:',
+      '{"shortTermTask":"one concise recent-task memory or null","longTermMemories":["durable user fact/preference/recurring request"]}',
+      '',
+      'Short-term task memory should summarize what the user asked and what was done. It can mention tools used.',
+      'Long-term memories should only include stable personal facts, durable preferences, work style, recurring needs, or repeated requests.',
+      'Do not store secrets, raw API keys, passwords, one-time codes, or temporary details.',
+      'If there is no durable long-term memory, use an empty array.',
+      '',
+      `User prompt:\n${userPrompt}`,
+      '',
+      `Tools used:\n${toolNames.length ? toolNames.join(', ') : 'None'}`,
+      '',
+      `Assistant response:\n${assistantResponse.slice(0, 4000)}`,
+    ].join('\n')
+
+    let extracted = ''
+    for await (const chunk of llmRouter.complete({
+      messages: [{ role: 'user', content: extractPrompt }],
+      model: request.model,
+      provider: request.provider,
+      customProviderId: request.customProviderId,
+      stream: false,
+      temperature: 0.1,
+      maxTokens: 600,
+    })) {
+      if (chunk.type === 'text' && chunk.content) extracted += chunk.content
+      if (chunk.type === 'error') throw new Error(chunk.content ?? 'Memory extraction failed')
+    }
+
+    const parsed = parseMemoryJson(extracted)
+    shortTermTask = parsed.shortTermTask?.trim() || fallbackTask
+    longTermMemories = parsed.longTermMemories ?? []
+  } catch (err: any) {
+    log.warn('memory', 'Automatic memory extraction failed; saving short-term fallback only', err?.message ?? err)
+  }
+
+  addShortTermMemory(shortTermTask, request.conversationId)
+  addLongTermMemories(longTermMemories)
 }
 
 async function listAgents(): Promise<LocalMindAgent[]> {
@@ -197,6 +390,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
       try {
         let currentMessages = [...request.messages]
+        const originalUserPrompt = getLastUserText(request.messages)
+        let assistantTranscript = ''
+        const executedToolNames: string[] = []
         const memoryPrompt = getMemorySystemPrompt()
         if (memoryPrompt) {
           currentMessages = [
@@ -260,7 +456,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         }
 
         const mcpTools = await getMcpToolsAsLlmTools()
-        const isToolAgent = request.agentId === 'cowork' || request.agentId === 'code'
+        const isToolAgent = request.agentId === 'cowork' || request.agentId === 'code' || request.agentId === 'personal-assistant'
         const localTools = isToolAgent ? getLocalWorkspaceTools() : []
         const enabledSkills = isToolAgent ? (await getAllSkillsForTools()) : []
         const skillTools = isToolAgent ? getSkillTools(enabledSkills) : []
@@ -271,6 +467,83 @@ export function registerIpcHandlers(win: BrowserWindow): void {
             streamId,
             tools: availableTools.map(t => t.function.name),
           })
+        }
+
+        if (request.agentId && request.planningEnabled && availableTools.length > 0) {
+          const planningPrompt = [
+            'Planning mode is enabled for this agent turn.',
+            'Before using any tools or executing any command, create a short execution plan.',
+            'Do not call tools in this planning step. Do not claim that work is complete.',
+            'Use this format:',
+            '## Plan',
+            '1. Restate the goal in one sentence.',
+            '2. List the smallest safe steps you will take.',
+            '3. Name any command/file/tool action that may need approval or verification.',
+            'Keep the plan concise, then wait for the execution step.',
+          ].join('\n')
+
+          const planMessages = [
+            {
+              role: 'system' as const,
+              content: planningPrompt,
+            },
+            ...currentMessages,
+          ]
+          const planRequest: LLMRequest = {
+            ...request,
+            messages: planMessages,
+            stream: true,
+            signal: controller.signal,
+            tools: undefined,
+            temperature: request.temperature ?? 0.2,
+          }
+
+          log.info('startStream', 'Planning mode enabled; running pre-tool planning pass', {
+            streamId,
+            agentId: request.agentId,
+          })
+
+          let planText = ''
+          for await (const chunk of llmRouter.complete(planRequest)) {
+            if (controller.signal.aborted || browserWin.isDestroyed()) break
+
+            if (chunk.type === 'done') {
+              totalTokens = chunk.usage ?? totalTokens
+              continue
+            }
+
+            if (chunk.type === 'error') {
+              const errMsg = (chunk as any).content ?? 'Planning failed'
+              log.error('startStream', 'Planning pass failed', { streamId, error: errMsg })
+              sendError(browserWin, streamId, errMsg)
+              doneSent = true
+              break
+            }
+
+            if (chunk.type === 'text' && chunk.content) {
+              chunkCount++
+              planText += chunk.content
+              assistantTranscript += chunk.content
+              sendChunk(browserWin, streamId, chunk)
+            }
+          }
+
+          if (doneSent || controller.signal.aborted || browserWin.isDestroyed()) {
+            return
+          }
+
+          const normalizedPlan = planText.trim()
+          if (normalizedPlan) {
+            sendChunk(browserWin, streamId, { type: 'text', content: '\n\n---\n\n' })
+            currentMessages.push({
+              role: 'assistant',
+              content: [
+                normalizedPlan,
+                '',
+                'Planning is complete. I will now execute the plan using available tools and verify the result.',
+              ].join('\n'),
+            })
+          }
         }
 
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -338,6 +611,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
             if (chunk.type === 'text') {
               chunkCount++
               textContent += (chunk as any).content ?? ''
+              assistantTranscript += (chunk as any).content ?? ''
               sendChunk(browserWin, streamId, chunk)
             }
           }
@@ -374,6 +648,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
             const isMcp = isMcpToolName(tc.name)
             let toolResult: { role: 'tool'; content: string; toolCallId: string }
+            executedToolNames.push(tc.name)
 
             if (isMcp) {
               log.info('startStream', `Executing MCP tool: ${tc.name}`, { streamId })
@@ -463,6 +738,10 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           doneSent = true
         }
 
+        if (doneSent && !controller.signal.aborted) {
+          void rememberPersonalAssistantTurn(request, originalUserPrompt, assistantTranscript, executedToolNames)
+        }
+
       } catch (err: any) {
         log.error('startStream', 'Uncaught exception in stream loop', {
           streamId,
@@ -499,12 +778,18 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return models
   }))
 
-  ipcMain.handle('llm:fetchCustomModels', safeHandle(async (_, data: { baseUrl: string; apiKey?: string }) => {
+  ipcMain.handle('llm:fetchCustomModels', safeHandle(async (_, data: { baseUrl: string; apiKey?: string; apiFormat?: 'openai' | 'anthropic' }) => {
     const baseUrl = String(data?.baseUrl ?? '').trim().replace(/\/+$/, '')
     if (!baseUrl) throw new Error('Base URL is required')
 
+    const apiFormat = data?.apiFormat ?? 'openai'
     const headers: Record<string, string> = {}
-    if (data?.apiKey?.trim()) headers.Authorization = `Bearer ${data.apiKey.trim()}`
+    if (apiFormat === 'anthropic') {
+      headers['anthropic-version'] = '2023-06-01'
+      if (data?.apiKey?.trim()) headers['x-api-key'] = data.apiKey.trim()
+    } else if (data?.apiKey?.trim()) {
+      headers.Authorization = `Bearer ${data.apiKey.trim()}`
+    }
 
     const response = await fetch(`${baseUrl}/models`, { headers })
     if (!response.ok) {
@@ -515,10 +800,23 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     const payload = await response.json()
     const rawModels = Array.isArray(payload?.data) ? payload.data : []
     return rawModels
-      .map((model: any) => ({
-        id: String(model?.id ?? '').trim(),
-        name: String(model?.id ?? '').trim(),
-      }))
+      .map((model: any) => {
+        const id = String(model?.id ?? '').trim();
+        const name = String(model?.name ?? model?.display_name ?? model?.id ?? '').trim()
+        const rawCtx = model?.context_length ?? 
+                       model?.context_window ?? 
+                       model?.max_model_len ?? 
+                       model?.max_position_embeddings ?? 
+                       model?.metadata?.context_length ?? 
+                       model?.metadata?.context_window ?? 
+                       model?.metadata?.max_model_len;
+        const contextWindow = extractContextWindow(id, rawCtx);
+        return {
+          id,
+          name: name || id,
+          contextWindow,
+        }
+      })
       .filter((model: { id: string }) => model.id)
   }))
 
@@ -562,8 +860,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return refined.trim() || sourcePrompt
   }))
 
-  ipcMain.handle('llm:consensus', safeHandle(async (_, data: { query: string; models: { provider: string; model: string; customProviderId?: string }[]; synthesizer: { provider: string; model: string; customProviderId?: string } }) => {
+  ipcMain.handle('llm:consensus', safeHandle(async (_, data: { query: string; models: { provider: string; model: string; customProviderId?: string }[]; synthesizer: { provider: string; model: string; customProviderId?: string }; debateRounds?: number }) => {
     const { query, models, synthesizer } = data
+    const requestedRounds = Number(data.debateRounds ?? 2)
+    const debateRounds = Number.isFinite(requestedRounds)
+      ? Math.max(1, Math.min(3, Math.round(requestedRounds)))
+      : 2
     if (!models || models.length < 2) throw new Error('At least 2 models are required for consensus.')
     if (!synthesizer) throw new Error('A synthesizer model must be selected.')
 
@@ -574,48 +876,202 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     // Run in background so we return the streamId immediately
     ;(async () => {
       try {
-        // Phase 1: Query all models in parallel
-        const candidatePromises = models.map(async (m) => {
+        type DebateRecord = {
+          model: string
+          provider: string
+          status: 'pending' | 'streaming' | 'done' | 'error'
+          initialText: string
+          rounds: { round: number; text: string; status: 'pending' | 'done' | 'error'; error?: string }[]
+          finalText: string
+          error?: string
+        }
+
+        const callModel = async (
+          m: { provider: string; model: string; customProviderId?: string },
+          prompt: string,
+          temperature = 0.3
+        ) => {
           const request: LLMRequest = {
-            messages: [{ role: 'user', content: query }],
+            messages: [{ role: 'user', content: prompt }],
             model: m.model,
             provider: m.provider as any,
             customProviderId: m.customProviderId,
             stream: false,
+            temperature,
           }
           let text = ''
           for await (const chunk of llmRouter.complete(request)) {
             if (chunk.type === 'text' && chunk.content) text += chunk.content
+            if (chunk.type === 'error') throw new Error(chunk.content ?? 'Model call failed')
           }
-          return { model: m.model, provider: m.provider, text }
+          return text.trim()
+        }
+
+        const moderatorBriefs: { round: number; text: string }[] = []
+        const records: DebateRecord[] = models.map((m) => ({
+          model: m.model,
+          provider: m.provider,
+          status: 'pending',
+          initialText: '',
+          rounds: [],
+          finalText: '',
+        }))
+
+        const sendDebateState = () => {
+          sendChunk(win, streamId, {
+            type: 'text',
+            content: `<!--CONSENSUS_DEBATE_JSON:${JSON.stringify({ debateRounds, records, moderatorBriefs })}-->\n`,
+          })
+        }
+
+        sendDebateState()
+
+        // Phase 1: ask each model for an independent position.
+        const initialPrompt = [
+          'You are part of a LocalMind consensus council.',
+          'Answer the user question independently before seeing other model opinions.',
+          '',
+          'Format your answer as concise bullets under these headings:',
+          '- Position',
+          '- Key reasons',
+          '- Assumptions or risks',
+          '- Confidence',
+          '',
+          `User question:\n${query}`,
+        ].join('\n')
+
+        const initialResults = await Promise.allSettled(models.map((m) => callModel(m, initialPrompt, 0.2)))
+        initialResults.forEach((result, i) => {
+          if (result.status === 'fulfilled') {
+            records[i].status = 'done'
+            records[i].initialText = result.value
+            records[i].finalText = result.value
+          } else {
+            const message = (result.reason as Error)?.message ?? 'Failed'
+            records[i].status = 'error'
+            records[i].initialText = `[Error: ${message}]`
+            records[i].finalText = records[i].initialText
+            records[i].error = message
+          }
         })
 
-        const results = await Promise.allSettled(candidatePromises)
-        const candidates = results.map((r, i) => {
-          if (r.status === 'fulfilled') return r.value
-          return { model: models[i].model, provider: models[i].provider, text: `[Error: ${(r.reason as Error)?.message ?? 'Failed'}]` }
-        })
-
-        // Send candidate results as an info chunk
-        const candidatesSummary = candidates.map((c, i) => `--- Model ${i + 1}: ${c.model} (${c.provider}) ---\n${c.text}`).join('\n\n')
+        const candidates = records.map((r) => ({
+          model: r.model,
+          provider: r.provider,
+          text: r.initialText,
+        }))
         sendChunk(win, streamId, { type: 'text', content: `<!--CANDIDATES_JSON:${JSON.stringify(candidates)}-->\n\n` })
+        sendDebateState()
 
-        // Phase 2: Synthesize
+        // Phase 2: moderated debate. The synthesizer anchors each round and feeds
+        // a disagreement brief back to every model.
+        for (let round = 1; round <= debateRounds; round++) {
+          const moderatorPrompt = [
+            'You are the Consensus Engine anchor and debate moderator.',
+            'Compare the model positions below. Identify only meaningful disagreements, weak assumptions, missing evidence, and places where one model should reconsider another model\'s point.',
+            'Write a compact moderator brief that will be sent to every model for the next debate round.',
+            'Do not answer the user directly yet.',
+            '',
+            `User question:\n${query}`,
+            '',
+            `Debate round to prepare: ${round} of ${debateRounds}`,
+            '',
+            'Current model positions:',
+            ...records.map((r, i) => [
+              `### Model ${i + 1}: ${r.model} (${r.provider})`,
+              r.finalText || r.initialText || '[No answer]',
+            ].join('\n')),
+            '',
+            'Moderator brief:',
+          ].join('\n')
+
+          const brief = await callModel(synthesizer, moderatorPrompt, 0.15)
+          moderatorBriefs.push({ round, text: brief })
+
+          records.forEach((record) => {
+            record.status = record.status === 'error' ? 'error' : 'streaming'
+            record.rounds.push({ round, text: '', status: record.status === 'error' ? 'error' : 'pending', error: record.error })
+          })
+          sendDebateState()
+
+          const roundResults = await Promise.allSettled(models.map((m, i) => {
+            if (records[i].status === 'error') return Promise.resolve(records[i].finalText)
+
+            const otherPositions = records
+              .map((r, idx) => idx === i ? null : `### ${r.model} (${r.provider})\n${r.finalText || r.initialText || '[No answer]'}`)
+              .filter(Boolean)
+              .join('\n\n')
+
+            const debatePrompt = [
+              'You are participating in a moderated AI consensus debate.',
+              'Review the moderator brief and the other models\' positions. Defend your answer where it still holds, revise it where another model is stronger, and focus only on disagreements that matter.',
+              '',
+              `User question:\n${query}`,
+              '',
+              `Your previous position:\n${records[i].finalText || records[i].initialText}`,
+              '',
+              `Other model positions:\n${otherPositions}`,
+              '',
+              `Synthesizer moderator brief for round ${round}:\n${brief}`,
+              '',
+              'Respond in concise bullets under these headings:',
+              '- Agreements accepted',
+              '- Disagreements or corrections',
+              '- Revised position',
+              '- Remaining uncertainty',
+            ].join('\n')
+
+            return callModel(m, debatePrompt, 0.25)
+          }))
+
+          roundResults.forEach((result, i) => {
+            const roundRecord = records[i].rounds.find((r) => r.round === round)
+            if (!roundRecord) return
+
+            if (result.status === 'fulfilled') {
+              const text = result.value.trim()
+              roundRecord.text = text
+              roundRecord.status = records[i].status === 'error' ? 'error' : 'done'
+              if (records[i].status !== 'error') {
+                records[i].status = 'done'
+                records[i].finalText = text || records[i].finalText
+              }
+            } else {
+              const message = (result.reason as Error)?.message ?? 'Failed'
+              roundRecord.text = `[Error: ${message}]`
+              roundRecord.status = 'error'
+              roundRecord.error = message
+              records[i].status = 'error'
+              records[i].error = message
+            }
+          })
+          sendDebateState()
+        }
+
+        // Phase 3: Synthesize the full debate.
         const synthesisPrompt = [
-          'You are a Consensus Synthesizer. Multiple AI models were asked the same question. Your job is to produce ONE unified answer.',
+          'You are a Consensus Synthesizer and debate anchor. Multiple AI models debated the same question through moderated rounds. Your job is to produce ONE unified answer.',
           '',
           'Rules:',
-          '1. Start with a "## Consensus" section summarizing what ALL models agree on.',
-          '2. Then add a "## Disagreements" section listing specific points where models differ, showing each model\'s position.',
-          '3. If there are unresolved conflicts, add a "## Open Questions" section.',
-          '4. Write in clear, direct language. Do not simply concatenate the responses.',
-          '5. Attribute specific claims to their source model when showing disagreements.',
+          '1. Start with "## Final Consensus" and give the best combined answer.',
+          '2. Add "## Why This Is The Consensus" with the strongest shared reasoning.',
+          '3. Add "## Remaining Disagreements" only for unresolved conflicts that matter.',
+          '4. Add "## Model Notes" with brief attribution when a model materially influenced the final answer.',
+          '5. Do not simply concatenate responses. Resolve conflicts where the debate supports a resolution.',
           '',
           `The user\'s question was: "${query}"`,
           '',
-          'Here are the model responses:',
+          'Initial model positions and debate revisions:',
           '',
-          ...candidates.map((c, i) => `### Model ${i + 1}: ${c.model}\n${c.text}`),
+          ...records.map((r, i) => [
+            `### Model ${i + 1}: ${r.model} (${r.provider})`,
+            `Initial:\n${r.initialText}`,
+            ...r.rounds.map((round) => `Round ${round.round}:\n${round.text}`),
+            `Latest position:\n${r.finalText}`,
+          ].join('\n\n')),
+          '',
+          'Moderator briefs:',
+          ...moderatorBriefs.map((brief) => `### Round ${brief.round}\n${brief.text}`),
           '',
           'Now produce the unified consensus answer:',
         ].join('\n')
@@ -628,14 +1084,17 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           stream: true,
         }
 
+        let sentDone = false
         for await (const chunk of llmRouter.complete(synthRequest)) {
           if (chunk.type === 'text' && chunk.content) {
             sendChunk(win, streamId, { type: 'text', content: chunk.content })
           }
           if (chunk.type === 'done') {
+            sentDone = true
             sendDone(win, streamId, chunk.usage ?? { promptTokens: 0, completionTokens: 0 })
           }
         }
+        if (!sentDone) sendDone(win, streamId, { promptTokens: 0, completionTokens: 0 })
       } catch (err: any) {
         sendError(win, streamId, err?.message ?? 'Consensus failed')
       }
@@ -840,6 +1299,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       parentMessageId: msg.parentMessageId ?? null,
       branchId: msg.branchId ?? null,
       createdAt: msg.createdAt ?? Date.now(),
+      toolCallId: msg.toolCallId ?? null,
     })
     await db.update(conversations)
       .set({ updatedAt: Date.now() })
@@ -971,17 +1431,38 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
   // --- MCP -------------------------------------------------------------------
 
   ipcMain.handle('mcp:connect', safeHandle(async (_, config: any) => {
-    const serverConfig: MCPServerConfig = {
-      id: config.id ?? uuid(),
-      name: config.name ?? 'MCP Server',
-      transport: config.transport ?? (config.url ? 'http+sse' : 'stdio'),
-      command: config.command,
-      args: config.args,
-      env: config.env,
-      url: config.url,
-      autoApprove: config.autoApprove ?? [],
-      enabled: true,
+    let serverConfig: MCPServerConfig
+    if (config.id && !config.command && !config.url) {
+      const row = await db.select().from(mcpServers).where(eq(mcpServers.id, config.id)).get()
+      if (row) {
+        try {
+          const savedConfig = JSON.parse(row.config)
+          serverConfig = {
+            ...savedConfig,
+            id: config.id,
+            enabled: true,
+          }
+        } catch {
+          throw new Error(`Failed to parse saved config for server "${config.name || config.id}"`)
+        }
+      } else {
+        throw new Error(`No saved configuration found for server "${config.name || config.id}"`)
+      }
+    } else {
+      serverConfig = {
+        id: config.id ?? uuid(),
+        name: config.name ?? 'MCP Server',
+        transport: config.transport ?? (config.url ? 'streamable-http' : 'stdio'),
+        command: config.command,
+        args: config.args,
+        env: config.env,
+        url: config.url,
+        headers: config.headers,
+        autoApprove: config.autoApprove ?? [],
+        enabled: true,
+      }
     }
+    serverConfig = normalizeMcpServerConfig(serverConfig)
     await mcpHostManager.connectServer(serverConfig)
 
     const existing = await db.select().from(mcpServers).where(eq(mcpServers.id, serverConfig.id)).get()
@@ -1490,7 +1971,7 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
               const config = JSON.parse(row.config) as MCPServerConfig
               // Respect DB enabled state over cached config value
               config.enabled = row.enabled ?? true
-              return config
+              return normalizeMcpServerConfig(config)
             } catch {
               return null
             }

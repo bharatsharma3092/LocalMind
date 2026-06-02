@@ -12,7 +12,8 @@ export interface CustomProviderConfig {
   id: string
   name: string
   baseUrl: string
-  models: { id: string; name: string }[]
+  apiFormat?: 'openai' | 'anthropic'
+  models: { id: string; name: string; contextWindow?: number }[]
 }
 
 export interface TokenUsage {
@@ -54,6 +55,8 @@ export interface LLMRequest {
   provider: ProviderType
   customProviderId?: string
   agentId?: string
+  conversationId?: string
+  planningEnabled?: boolean
   workspacePath?: string
   personaId?: string
   personaVariables?: Record<string, string>
@@ -93,6 +96,7 @@ export interface ConsensusRequest {
   query: string
   models: ConsensusModelSelection[]
   synthesizer: ConsensusModelSelection
+  debateRounds?: number
 }
 
 export interface CandidateResponse {
@@ -108,7 +112,7 @@ export interface LLMApi {
   startStream: (req: LLMRequest) => Promise<IPCResponse<{ streamId: string }>>
   cancelStream: (streamId: string) => Promise<void>
   listModels: (provider: string) => Promise<IPCResponse<ModelInfo[]>>
-  fetchCustomModels: (data: { baseUrl: string; apiKey?: string }) => Promise<IPCResponse<{ id: string; name: string }[]>>
+  fetchCustomModels: (data: { baseUrl: string; apiKey?: string; apiFormat?: 'openai' | 'anthropic' }) => Promise<IPCResponse<{ id: string; name: string; contextWindow?: number }[]>>
   refinePrompt: (req: LLMRequest & { prompt: string }) => Promise<IPCResponse<string>>
   transcribe: (data: { audio: number[]; provider: string; customProviderId?: string }) => Promise<IPCResponse<string>>
   consensus: (req: ConsensusRequest) => Promise<IPCResponse<{ streamId: string }>>

@@ -15,10 +15,52 @@ export interface CustomProviderConfig {
   id: string
   name: string
   baseUrl: string
-  models: { id: string; name: string }[]
+  apiFormat?: 'openai' | 'anthropic'
+  models: { id: string; name: string; contextWindow?: number }[]
 }
 
 export type ProviderStatus = 'unknown' | 'online' | 'offline' | 'error'
+
+export function extractContextWindow(modelId: string, parsedValue?: number): number {
+  if (parsedValue && parsedValue > 0 && parsedValue !== 4096) {
+    return parsedValue;
+  }
+  const id = modelId.toLowerCase();
+  
+  if (id.includes('gemini-1.5-pro') || id.includes('gemini-2.0-pro') || id.includes('gemini-2.5-pro')) {
+    return 2000000;
+  }
+  if (id.includes('gemini-1.5-flash') || id.includes('gemini-2.0-flash') || id.includes('gemini-2.5-flash')) {
+    return 1000000;
+  }
+  if (id.includes('gemini')) {
+    return 1000000;
+  }
+  
+  if (id.includes('claude-3-5') || id.includes('claude-3.5') || id.includes('claude-3')) {
+    return 200000;
+  }
+  
+  if (id.includes('gpt-4o') || id.includes('gpt-4-turbo')) {
+    return 128000;
+  }
+  if (id.includes('o1') || id.includes('o3-mini')) {
+    return 200000;
+  }
+  if (id.includes('gpt-4')) {
+    return 8192;
+  }
+  
+  if (id.includes('llama-3.1') || id.includes('llama-3.2') || id.includes('llama-3')) {
+    return 128000;
+  }
+  
+  if (id.includes('mixtral') || id.includes('mistral')) {
+    return 32768;
+  }
+  
+  return 128000;
+}
 
 interface ProviderStore {
   availableModels: ModelInfo[]
@@ -41,9 +83,21 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   providerErrors: {},
   customProviders: [],
 
-  setModel: (model) => set({ selectedModel: model }),
+  setModel: (model) => {
+    set({ selectedModel: model })
+    try {
+      window.localmind?.settings?.set('selectedModelInfo', model)
+    } catch {}
+  },
 
   loadCustomProviders: async () => {
+    try {
+      const savedRes = await window.localmind.settings.get('selectedModelInfo')
+      if (savedRes.success && savedRes.data) {
+        set({ selectedModel: savedRes.data })
+      }
+    } catch {}
+
     try {
       const res = await window.localmind.settings.get('customProviders')
       if (res.success && Array.isArray(res.data)) {
@@ -61,6 +115,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
           id: 'legacy',
           name: 'Custom Provider',
           baseUrl: legacyUrl ?? 'http://localhost:8080/v1',
+          apiFormat: 'openai',
           models: legacyModels,
         }]
         set({ customProviders: migrated })
@@ -134,7 +189,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
             name: m.name ?? m.id,
             provider: 'custom',
             customProviderId: cp.id,
-            contextWindow: 4096,
+            contextWindow: extractContextWindow(m.id, m.contextWindow),
             supportsVision: false,
             supportsToolUse: true,
           })
@@ -165,7 +220,22 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     }
 
     const state = get()
-    if (!state.selectedModel && state.availableModels.length > 0) {
+    if (state.selectedModel) {
+      const matchingModel = state.availableModels.find(
+        (m) =>
+          m.id === state.selectedModel?.id &&
+          m.provider === state.selectedModel?.provider &&
+          (m.customProviderId ?? '') === (state.selectedModel?.customProviderId ?? '')
+      )
+      if (matchingModel) {
+        set({ selectedModel: matchingModel })
+        try {
+          window.localmind?.settings?.set('selectedModelInfo', matchingModel)
+        } catch {}
+      } else if (state.availableModels.length > 0) {
+        set({ selectedModel: state.availableModels[0] })
+      }
+    } else if (state.availableModels.length > 0) {
       set({ selectedModel: state.availableModels[0] })
     }
   },

@@ -13,6 +13,7 @@ asarUnpack:
   - resources/**
 win:
   executableName: localmind
+  icon: resources/icon.ico
   target:
     - target: nsis
       arch:

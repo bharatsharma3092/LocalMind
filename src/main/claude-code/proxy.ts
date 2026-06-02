@@ -461,9 +461,10 @@ async function toLiteLlmParams(model?: ProxyModel): Promise<Record<string, strin
   if (model.provider === 'custom') {
     const provider = getCustomProvidersFromSettings().find((item) => item.id === model.customProviderId)
     const key = model.customProviderId ? await getSecret(`custom-provider-${model.customProviderId}-api-key`) : await getSecret('custom-api-key')
+    const isAnthropic = provider?.apiFormat === 'anthropic'
     return {
       model: model.id,
-      custom_llm_provider: 'openai',
+      custom_llm_provider: isAnthropic ? 'anthropic' : 'openai',
       api_base: provider?.baseUrl ?? 'http://localhost:8080/v1',
       ...(key ? { api_key: key } : {}),
     }
