@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 type Theme = 'light' | 'dark' | 'system'
-type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' | 'sunset' | 'gold' | 'copper'
+type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' | 'sunset' | 'gold' | 'copper' | 'blue' | 'sky' | 'cyan' | 'teal' | 'emerald' | 'green' | 'lime' | 'violet' | 'purple' | 'fuchsia' | 'pink' | 'slate'
 type WebSearchProvider = 'tavily' | 'serper' | 'exa' | 'duckduckgo'
 
 function applyThemeToDOM(theme: Theme) {

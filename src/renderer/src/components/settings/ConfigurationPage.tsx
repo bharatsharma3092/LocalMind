@@ -4,7 +4,7 @@ import { PersonaLibrary } from '../personas/PersonaLibrary'
 import type { AppPage } from '../sidebar/Sidebar'
 
 type ConfigTab = 'general' | 'appearance' | 'personas' | 'data'
-type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' | 'sunset' | 'gold' | 'copper'
+type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' | 'sunset' | 'gold' | 'copper' | 'blue' | 'sky' | 'cyan' | 'teal' | 'emerald' | 'green' | 'lime' | 'violet' | 'purple' | 'fuchsia' | 'pink' | 'slate'
 type Theme = 'light' | 'dark' | 'system'
 
 const colorOptions: { id: ColorTheme; label: string; hex: string }[] = [
@@ -17,6 +17,18 @@ const colorOptions: { id: ColorTheme; label: string; hex: string }[] = [
   { id: 'sunset', label: 'Sunset', hex: '#fb923c' },
   { id: 'gold', label: 'Gold', hex: '#eab308' },
   { id: 'copper', label: 'Copper', hex: '#c2742e' },
+  { id: 'blue', label: 'Blue', hex: '#2563eb' },
+  { id: 'sky', label: 'Sky', hex: '#0284c7' },
+  { id: 'cyan', label: 'Cyan', hex: '#0891b2' },
+  { id: 'teal', label: 'Teal', hex: '#0d9488' },
+  { id: 'emerald', label: 'Emerald', hex: '#059669' },
+  { id: 'green', label: 'Green', hex: '#16a34a' },
+  { id: 'lime', label: 'Lime', hex: '#65a30d' },
+  { id: 'violet', label: 'Violet', hex: '#7c3aed' },
+  { id: 'purple', label: 'Purple', hex: '#9333ea' },
+  { id: 'fuchsia', label: 'Fuchsia', hex: '#c026d3' },
+  { id: 'pink', label: 'Pink', hex: '#db2777' },
+  { id: 'slate', label: 'Slate', hex: '#475569' },
 ]
 
 const navItems: { id: ConfigTab; label: string; icon: string }[] = [

@@ -15,13 +15,23 @@ interface Props {
   onSettingsClick: () => void
 }
 
+const PRIMARY_NAV: { id: AppPage; label: string; icon: string }[] = [
+  { id: 'chat', label: 'Home', icon: 'home' },
+  { id: 'agents', label: 'Agents', icon: 'smart_toy' },
+  { id: 'skills', label: 'Skills', icon: 'auto_awesome' },
+  { id: 'mcp', label: 'Connections', icon: 'hub' },
+  { id: 'consensus', label: 'Consensus', icon: 'forum' },
+]
+
 export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
   const { createConversation, clearActiveConversation } = useChatStore()
   const draftPersonaId = usePersonaStore((state) => state.draftPersonaId)
   const theme = useSettingsStore((state) => state.theme)
   const { loadWorkspaces } = useWorkspaceStore()
   const { loadDocuments, loadStatus } = useRagStore()
-  const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true)
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true
+  )
 
   useEffect(() => {
     loadWorkspaces()
@@ -45,58 +55,85 @@ export function Sidebar({ currentPage, onNavigate, onSettingsClick }: Props) {
   }
 
   return (
-    <nav className="fixed left-0 top-0 h-full w-[260px] border-r border-outline-variant bg-surface-container-lowest flex flex-col py-4 z-40 hidden md:flex">
-      {/* Header */}
-      <button
-        type="button"
-        onClick={goHome}
-        className="mx-5 mb-8 h-[68px] cursor-pointer rounded-lg text-left transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-        aria-label="Go to LocalMind home"
-        title="Home"
-      >
-        <LocalMindLogo variant={logoVariant} />
-      </button>
-
-      {/* CTA */}
-      <div className="px-4 mb-4">
+    <nav className="h-full w-full flex flex-col bg-surface-container-lowest border-r border-outline-variant">
+      {/* Brand */}
+      <div className="h-12 px-3 flex items-center border-b border-outline-variant">
         <button
-          onClick={() => { createConversation({ personaId: draftPersonaId }); onNavigate('chat') }}
-          className="w-full bg-primary-container text-white hover:bg-accent-hover transition-colors duration-200 py-3 rounded-lg flex items-center justify-center gap-2 font-semibold text-[14px] shadow-sm"
+          type="button"
+          onClick={goHome}
+          className="h-8 flex items-center rounded-md px-1.5 -ml-1 hover:bg-surface-container-low transition-colors"
+          aria-label="LocalMind home"
+          title="Home"
+        >
+          <LocalMindLogo variant={logoVariant} />
+        </button>
+      </div>
+
+      {/* Quick actions: New chat + command palette hint */}
+      <div className="p-3 space-y-2">
+        <button
+          onClick={() => {
+            createConversation({ personaId: draftPersonaId })
+            onNavigate('chat')
+          }}
+          className="w-full h-9 bg-primary-container text-on-primary-container hover:opacity-90 transition-opacity rounded-lg flex items-center justify-center gap-2 font-semibold text-[13px]"
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
           New Chat
         </button>
+        <button
+          onClick={() => window.dispatchEvent(new Event('localmind:open-command-palette'))}
+          className="w-full h-8 rounded-lg flex items-center gap-2 px-2.5 text-[12px] text-on-surface-variant bg-surface-container-low hover:bg-surface-container border border-outline-variant transition-colors"
+          title="Search and commands"
+        >
+          <span className="material-symbols-outlined text-[16px]">search</span>
+          <span className="flex-1 text-left">Search…</span>
+          <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant">⌘K</kbd>
+        </button>
       </div>
 
-      {/* Conversation list — always visible */}
-      <div className="flex-1 min-h-0 overflow-hidden px-2">
-        <div className="h-full overflow-y-auto">
+      {/* Recent chats — the workspace's primary list */}
+      <div className="flex-1 min-h-0 flex flex-col px-1.5">
+        <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant/70">
+          Recent
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
           <ConversationList onConversationClick={() => onNavigate('chat')} />
         </div>
       </div>
 
-      {/* Footer Tabs */}
-      <div className="mt-auto px-2 space-y-1 pt-4 border-t border-outline-variant/50">
-        <button
-          onClick={goHome}
-          className={`w-full flex items-center py-3 px-4 text-[12px] uppercase tracking-widest font-bold transition-all hover:translate-x-1 duration-200 ${
-            currentPage === 'chat'
-              ? 'text-accent bg-accent/10 border-l-4 border-primary-container'
-              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high/40 border-l-4 border-transparent'
-          }`}
-        >
-          <span className="material-symbols-outlined mr-3 text-[20px]">home</span>
-          Home
-        </button>
+      {/* Primary navigation — quiet, secondary to search/AI */}
+      <div className="px-1.5 py-2 border-t border-outline-variant space-y-0.5">
+        {PRIMARY_NAV.map((item) => {
+          const active = currentPage === item.id
+          return (
+            <button
+              key={item.id}
+              onClick={() => (item.id === 'chat' ? goHome() : onNavigate(item.id))}
+              className={`w-full flex items-center gap-2.5 h-8 px-2.5 rounded-md text-[13px] font-medium transition-colors ${
+                active
+                  ? 'bg-surface-container-high text-on-surface'
+                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
+              }`}
+            >
+              <span className={`material-symbols-outlined text-[18px] ${active ? 'text-primary' : ''}`}>
+                {item.icon}
+              </span>
+              {item.label}
+            </button>
+          )
+        })}
         <button
           onClick={onSettingsClick}
-          className={`w-full flex items-center py-3 px-4 text-[12px] uppercase tracking-widest font-bold transition-all hover:translate-x-1 duration-200 ${
+          className={`w-full flex items-center gap-2.5 h-8 px-2.5 rounded-md text-[13px] font-medium transition-colors ${
             currentPage === 'settings'
-              ? 'text-accent bg-accent/10 border-l-4 border-primary-container'
-              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high/40 border-l-4 border-transparent'
+              ? 'bg-surface-container-high text-on-surface'
+              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
           }`}
         >
-          <span className="material-symbols-outlined mr-3 text-[20px]">settings</span>
+          <span className={`material-symbols-outlined text-[18px] ${currentPage === 'settings' ? 'text-primary' : ''}`}>
+            settings
+          </span>
           Settings
         </button>
       </div>

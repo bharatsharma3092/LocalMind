@@ -4,18 +4,146 @@ import { useChatStore } from '../../stores/chatStore'
 interface TraceHUDProps {
   conversationId: string | null
   onClose?: () => void
+  embedded?: boolean
 }
+
+type TraceStatus = 'running' | 'success' | 'error'
 
 interface ToolTraceItem {
   id: string
   name: string
   arguments: string
   result?: string
-  status: 'executing' | 'success' | 'error'
+  status: TraceStatus
   timestamp: number
 }
 
-export function TraceHUD({ conversationId, onClose }: TraceHUDProps) {
+interface ActionDescriptor {
+  icon: string
+  title: string
+  detail: string
+  group: 'Workspace' | 'Browser' | 'Command' | 'Search' | 'MCP' | 'Skill' | 'Tool'
+}
+
+/** Safely parse a JSON-ish string, returning null on failure. */
+function tryParse(value?: string): any {
+  if (!value) return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+/** Turn a raw tool name + arguments into a clear, human-readable action. */
+function describeAction(name: string, argsStr: string): ActionDescriptor {
+  const args = tryParse(argsStr) ?? {}
+
+  // MCP tools: mcp__<server>__<tool>
+  if (name.startsWith('mcp__')) {
+    const parts = name.split('__')
+    const server = parts[1] ?? 'server'
+    const tool = parts.slice(2).join(' ').replace(/_/g, ' ') || 'tool'
+    return { icon: 'extension', title: tool.replace(/^\w/, (c) => c.toUpperCase()), detail: `via ${server}`, group: 'MCP' }
+  }
+
+  if (name.startsWith('skill__')) {
+    const skill = name.replace(/^skill__/, '').replace(/_/g, ' ')
+    return { icon: 'auto_awesome', title: 'Run skill', detail: skill, group: 'Skill' }
+  }
+
+  switch (name) {
+    case 'local__open_url':
+      return { icon: 'open_in_browser', title: 'Open browser', detail: String(args.url ?? ''), group: 'Browser' }
+    case 'local__launch_app':
+      return { icon: 'rocket_launch', title: 'Launch app', detail: [args.command, ...(Array.isArray(args.args) ? args.args : [])].filter(Boolean).join(' '), group: 'Browser' }
+    case 'local__read_file':
+      return { icon: 'description', title: 'Read file', detail: String(args.path ?? ''), group: 'Workspace' }
+    case 'local__write_file':
+      return { icon: 'note_add', title: 'Write file', detail: String(args.path ?? ''), group: 'Workspace' }
+    case 'local__edit_file':
+      return { icon: 'edit', title: 'Edit file', detail: String(args.path ?? ''), group: 'Workspace' }
+    case 'local__patch_file':
+      return { icon: 'difference', title: 'Patch file', detail: String(args.path ?? ''), group: 'Workspace' }
+    case 'local__delete_path':
+      return { icon: 'delete', title: 'Delete', detail: String(args.path ?? ''), group: 'Workspace' }
+    case 'local__list_files':
+      return { icon: 'folder_open', title: 'List files', detail: String(args.path ?? 'workspace root'), group: 'Workspace' }
+    case 'local__glob':
+      return { icon: 'pattern', title: 'Find files', detail: String(args.pattern ?? ''), group: 'Workspace' }
+    case 'local__repo_map':
+      return { icon: 'account_tree', title: 'Map repository', detail: 'scanning project structure', group: 'Workspace' }
+    case 'local__search_files':
+    case 'local__grep':
+      return { icon: 'manage_search', title: 'Search code', detail: String(args.query ?? ''), group: 'Search' }
+    case 'local__write_spreadsheet':
+    case 'local__append_spreadsheet':
+      return { icon: 'table', title: name.includes('append') ? 'Append spreadsheet' : 'Write spreadsheet', detail: String(args.path ?? ''), group: 'Workspace' }
+    case 'local__write_document':
+    case 'local__append_document':
+      return { icon: 'article', title: name.includes('append') ? 'Append document' : 'Write document', detail: String(args.path ?? ''), group: 'Workspace' }
+    case 'local__git_status':
+      return { icon: 'commit', title: 'Git status', detail: 'checking working tree', group: 'Command' }
+    case 'local__git_diff':
+      return { icon: 'difference', title: 'Git diff', detail: String(args.path ?? 'all changes'), group: 'Command' }
+    case 'local__run_npm_script':
+      return { icon: 'terminal', title: 'Run npm script', detail: String(args.script ?? ''), group: 'Command' }
+    case 'local__run_command':
+      return { icon: 'terminal', title: 'Run command', detail: [args.command, ...(Array.isArray(args.args) ? args.args : [])].filter(Boolean).join(' '), group: 'Command' }
+    case 'web__search':
+      return { icon: 'travel_explore', title: 'Search the web', detail: String(args.query ?? ''), group: 'Search' }
+    default:
+      return { icon: 'bolt', title: name.replace(/^local__/, '').replace(/_/g, ' '), detail: '', group: 'Tool' }
+  }
+}
+
+/** Produce a short, plain-language outcome line from a tool result. */
+function summarizeResult(result: string | undefined, status: TraceStatus): string {
+  if (status === 'running') return 'Working on it…'
+  if (!result) return status === 'success' ? 'Completed.' : 'No result returned.'
+
+  const parsed = tryParse(result)
+  if (parsed && typeof parsed === 'object') {
+    if (parsed.error) return String(parsed.error)
+    if (parsed.success && parsed.opened) return `Opened ${parsed.opened}`
+    if (parsed.success && parsed.launched) return `Launched ${parsed.launched}`
+    if (typeof parsed.stdout === 'string' && parsed.stdout.trim()) return parsed.stdout.trim().split('\n')[0].slice(0, 140)
+    if (Array.isArray(parsed.files)) return `${parsed.files.length} file(s) found`
+    if (Array.isArray(parsed.results)) return `${parsed.results.length} result(s)`
+    if (parsed.success) return 'Completed successfully.'
+  }
+
+  const firstLine = result.trim().split('\n')[0]
+  return firstLine.slice(0, 140) + (firstLine.length > 140 ? '…' : '')
+}
+
+const STATUS_META: Record<TraceStatus, { label: string; icon: string; pill: string; dot: string }> = {
+  running: {
+    label: 'Running',
+    icon: 'progress_activity',
+    pill: 'bg-secondary-container/30 text-secondary',
+    dot: 'bg-secondary animate-pulse',
+  },
+  success: {
+    label: 'Done',
+    icon: 'check_circle',
+    pill: 'bg-success/15 text-success',
+    dot: 'bg-success',
+  },
+  error: {
+    label: 'Failed',
+    icon: 'error',
+    pill: 'bg-error/15 text-error',
+    dot: 'bg-error',
+  },
+}
+
+function prettyJson(value?: string): string {
+  const parsed = tryParse(value)
+  return parsed ? JSON.stringify(parsed, null, 2) : (value ?? '')
+}
+
+export function TraceHUD({ conversationId, onClose, embedded = false }: TraceHUDProps) {
   const { messages } = useChatStore()
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
 
@@ -29,13 +157,10 @@ export function TraceHUD({ conversationId, onClose }: TraceHUDProps) {
 
     for (let i = 0; i < activeMessages.length; i++) {
       const msg = activeMessages[i]
-
-      // Extract tool calls from assistant messages
       if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
         for (const tc of msg.toolCalls) {
-          // Look for a corresponding tool result message in subsequent messages
           let matchingResult: string | undefined
-          let status: 'executing' | 'success' | 'error' = 'executing'
+          let status: TraceStatus = 'running'
 
           for (let j = i + 1; j < activeMessages.length; j++) {
             const potentialResult = activeMessages[j]
@@ -62,151 +187,167 @@ export function TraceHUD({ conversationId, onClose }: TraceHUDProps) {
     return items
   }, [activeMessages])
 
-  const getToolType = (name: string): { label: string; bg: string; text: string } => {
-    if (name.startsWith('local__')) {
-      return { label: 'Workspace', bg: 'bg-[#0f172a] border-blue-500/20', text: 'text-blue-400' }
-    }
-    if (name.startsWith('mcp__')) {
-      return { label: 'MCP', bg: 'bg-[#1e1b4b] border-indigo-500/20', text: 'text-indigo-400' }
-    }
-    if (name.startsWith('web__') || name === 'web__search') {
-      return { label: 'Search', bg: 'bg-[#064e3b] border-emerald-500/20', text: 'text-emerald-400' }
-    }
-    return { label: 'Custom', bg: 'bg-[#3f3f46] border-zinc-500/20', text: 'text-zinc-400' }
-  }
-
-  const formatToolName = (name: string): string => {
-    return name
-      .replace(/^local__/, '')
-      .replace(/^mcp__[a-zA-Z0-9_-]+__/, '')
-      .replace(/^web__/, '')
-      .replace(/_/g, ' ')
-  }
-
-  const parseArgs = (argsStr: string): string => {
-    try {
-      const parsed = JSON.parse(argsStr)
-      return JSON.stringify(parsed, null, 2)
-    } catch {
-      return argsStr
-    }
-  }
+  const summary = useMemo(() => {
+    const total = traceItems.length
+    const done = traceItems.filter((t) => t.status === 'success').length
+    const failed = traceItems.filter((t) => t.status === 'error').length
+    const running = traceItems.filter((t) => t.status === 'running').length
+    return { total, done, failed, running }
+  }, [traceItems])
 
   return (
-    <div className="w-[320px] lg:w-[380px] h-full flex flex-col bg-[#0b0c10]/95 backdrop-blur-xl border-l border-[#1f2833]/60 shadow-2xl overflow-hidden transition-all duration-300">
+    <div className={`${embedded ? 'w-full' : 'w-[340px] lg:w-[400px] border-l border-outline-variant'} h-full flex flex-col bg-surface overflow-hidden`}>
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-[#1f2833]/40 bg-[#1f2833]/15">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[20px] text-accent animate-pulse">analytics</span>
-          <h3 className="text-[14px] font-bold tracking-wider uppercase text-on-surface">Execution Trace HUD</h3>
+      {!embedded && (
+      <div className="flex items-center justify-between px-4 py-3.5 border-b border-outline-variant bg-surface-container">
+        <div className="flex items-center gap-2.5">
+          <span className="material-symbols-outlined text-[20px] text-primary">bolt</span>
+          <div>
+            <h3 className="text-[13px] font-bold text-on-surface leading-tight">Agent Activity</h3>
+            <p className="text-[11px] text-on-surface-variant leading-tight">
+              {summary.total === 0 ? 'No actions yet' : `${summary.total} action${summary.total === 1 ? '' : 's'}`}
+            </p>
+          </div>
         </div>
-        <button
-          onClick={onClose}
-          className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-[#1f2833]/30 text-text-muted hover:text-on-surface transition-colors cursor-pointer"
-        >
-          <span className="material-symbols-outlined text-[18px]">close</span>
-        </button>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6 scrollbar-thin">
-        {traceItems.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center text-text-muted/60 space-y-3 py-10">
-            <span className="material-symbols-outlined text-[40px] opacity-40">timeline</span>
-            <p className="text-[13px] font-medium max-w-[200px]">No active tool execution traces recorded for this turn.</p>
-          </div>
-        ) : (
-          <div className="relative border-l-2 border-[#1f2833]/40 pl-6 ml-3 space-y-6">
-            {traceItems.map((item) => {
-              const toolType = getToolType(item.name)
-              const isExpanded = expandedItem === item.id
-
-              return (
-                <div key={item.id} className="relative group transition-all duration-200">
-                  {/* Timeline Dot Indicator */}
-                  <span className={`absolute -left-[31px] top-1.5 w-4 h-4 rounded-full border-2 bg-[#0b0c10] flex items-center justify-center transition-all duration-300 ${
-                    item.status === 'executing'
-                      ? 'border-blue-400 shadow-[0_0_10px_rgba(96,165,250,0.5)] animate-ping'
-                      : item.status === 'error'
-                      ? 'border-red-400 shadow-[0_0_10px_rgba(248,113,113,0.4)]'
-                      : 'border-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.4)]'
-                  }`}>
-                    {item.status === 'executing' && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                    )}
-                  </span>
-
-                  {/* Execution Trace Block */}
-                  <div className={`p-4 rounded-xl border transition-all duration-200 ${
-                    item.status === 'executing'
-                      ? 'bg-blue-950/10 border-blue-500/20'
-                      : item.status === 'error'
-                      ? 'bg-red-950/10 border-red-500/20'
-                      : 'bg-[#1f2833]/10 border-[#1f2833]/40 hover:border-[#1f2833]/80'
-                  }`}>
-                    {/* Header */}
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap mb-1.5">
-                          <span className={`text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded-full border ${toolType.bg} ${toolType.text}`}>
-                            {toolType.label}
-                          </span>
-                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                            item.status === 'executing'
-                              ? 'bg-blue-400/10 text-blue-400'
-                              : item.status === 'error'
-                              ? 'bg-red-400/10 text-red-400'
-                              : 'bg-emerald-400/10 text-emerald-400'
-                          }`}>
-                            {item.status}
-                          </span>
-                        </div>
-                        <h4 className="text-[13px] font-bold text-on-surface truncate capitalize">
-                          {formatToolName(item.name)}
-                        </h4>
-                      </div>
-                      <button
-                        onClick={() => setExpandedItem(isExpanded ? null : item.id)}
-                        className="text-text-muted hover:text-on-surface p-1 rounded transition-colors"
-                        title={isExpanded ? "Collapse" : "Expand logs"}
-                      >
-                        <span className="material-symbols-outlined text-[16px] transition-transform duration-200">
-                          {isExpanded ? 'unfold_less' : 'unfold_more'}
-                        </span>
-                      </button>
-                    </div>
-
-                    {/* Collapsible logs */}
-                    {isExpanded && (
-                      <div className="mt-3 pt-3 border-t border-[#1f2833]/30 space-y-3 text-[11px] leading-relaxed font-mono">
-                        <div>
-                          <span className="text-[10px] text-text-muted/65 uppercase tracking-wider block mb-1">Arguments</span>
-                          <pre className="p-2.5 rounded-lg bg-black/60 border border-[#1f2833]/30 overflow-x-auto text-[#88ddff] max-h-40 scrollbar-thin">
-                            {parseArgs(item.arguments)}
-                          </pre>
-                        </div>
-                        {item.result && (
-                          <div>
-                            <span className="text-[10px] text-text-muted/65 uppercase tracking-wider block mb-1">Result</span>
-                            <pre className="p-2.5 rounded-lg bg-black/60 border border-[#1f2833]/30 overflow-x-auto text-[#a3e635] max-h-56 scrollbar-thin whitespace-pre-wrap break-all">
-                              {item.result}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface transition-colors"
+            title="Close"
+          >
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
         )}
       </div>
+      )}
 
-      {/* Footer Info */}
-      <div className="px-5 py-3 border-t border-[#1f2833]/30 bg-black/40 text-[10px] text-text-muted/70 flex items-center justify-between font-medium">
-        <span>Round Status: Active</span>
-        <span>{traceItems.length} tool cycle{traceItems.length === 1 ? '' : 's'}</span>
+      {/* Status strip */}
+      {summary.total > 0 && (
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-outline-variant bg-surface-container-low text-[11px] font-semibold">
+          {summary.running > 0 && (
+            <span className="flex items-center gap-1 text-secondary">
+              <span className="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse" /> {summary.running} running
+            </span>
+          )}
+          <span className="flex items-center gap-1 text-success">
+            <span className="w-1.5 h-1.5 rounded-full bg-success" /> {summary.done} done
+          </span>
+          {summary.failed > 0 && (
+            <span className="flex items-center gap-1 text-error">
+              <span className="w-1.5 h-1.5 rounded-full bg-error" /> {summary.failed} failed
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Action list */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin">
+        {traceItems.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center text-on-surface-variant/70 space-y-3 py-10">
+            <span className="material-symbols-outlined text-[40px] opacity-40">timeline</span>
+            <p className="text-[12px] font-medium max-w-[220px]">
+              When the agent uses tools, each action and its status will appear here. Click an action to see details.
+            </p>
+          </div>
+        ) : (
+          traceItems.map((item, index) => {
+            const action = describeAction(item.name, item.arguments)
+            const statusMeta = STATUS_META[item.status]
+            const isExpanded = expandedItem === item.id
+            const outcome = summarizeResult(item.result, item.status)
+
+            return (
+              <div
+                key={item.id}
+                className={`rounded-xl border transition-colors ${
+                  item.status === 'error'
+                    ? 'border-error/40 bg-error/5'
+                    : item.status === 'running'
+                    ? 'border-secondary/40 bg-secondary-container/10'
+                    : 'border-outline-variant bg-surface-container-low'
+                }`}
+              >
+                {/* Clickable summary row */}
+                <button
+                  onClick={() => setExpandedItem(isExpanded ? null : item.id)}
+                  className="w-full flex items-start gap-3 p-3 text-left"
+                >
+                  {/* Step number + action icon */}
+                  <div className="flex flex-col items-center gap-1 pt-0.5">
+                    <span className="text-[10px] font-bold text-on-surface-variant/60 tabular-nums">{index + 1}</span>
+                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center bg-surface-container-high text-on-surface`}>
+                      <span className="material-symbols-outlined text-[18px]">{action.icon}</span>
+                    </span>
+                  </div>
+
+                  {/* Title + detail + status */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-[13px] font-bold text-on-surface truncate capitalize">{action.title}</h4>
+                      <span className={`shrink-0 flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${statusMeta.pill}`}>
+                        <span className={`material-symbols-outlined text-[12px] ${item.status === 'running' ? 'animate-spin' : ''}`}>
+                          {statusMeta.icon}
+                        </span>
+                        {statusMeta.label}
+                      </span>
+                    </div>
+                    {action.detail && (
+                      <p className="text-[11px] text-on-surface-variant font-mono truncate mt-0.5" title={action.detail}>
+                        {action.detail}
+                      </p>
+                    )}
+                    <p className={`text-[11px] mt-1 line-clamp-2 ${item.status === 'error' ? 'text-error' : 'text-on-surface-variant/90'}`}>
+                      {outcome}
+                    </p>
+                  </div>
+
+                  {/* Expand chevron */}
+                  <span className={`material-symbols-outlined text-[18px] text-on-surface-variant/60 transition-transform duration-200 mt-0.5 ${isExpanded ? 'rotate-180' : ''}`}>
+                    expand_more
+                  </span>
+                </button>
+
+                {/* Expanded details */}
+                {isExpanded && (
+                  <div className="px-3 pb-3 space-y-3 text-[11px]">
+                    <div>
+                      <span className="text-[10px] text-on-surface-variant/70 uppercase tracking-wider font-bold block mb-1">
+                        Action
+                      </span>
+                      <code className="text-[11px] text-on-surface-variant break-all">{item.name}</code>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-on-surface-variant/70 uppercase tracking-wider font-bold block mb-1">
+                        Inputs
+                      </span>
+                      <pre className="p-2.5 rounded-lg bg-surface-container-highest/60 border border-outline-variant overflow-x-auto max-h-40 scrollbar-thin font-mono text-on-surface">
+                        {prettyJson(item.arguments) || '—'}
+                      </pre>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-on-surface-variant/70 uppercase tracking-wider font-bold block mb-1">
+                        {item.status === 'error' ? 'Error output' : 'Result'}
+                      </span>
+                      {item.result ? (
+                        <pre className={`p-2.5 rounded-lg border overflow-x-auto max-h-56 scrollbar-thin font-mono whitespace-pre-wrap break-all ${
+                          item.status === 'error'
+                            ? 'bg-error/5 border-error/30 text-error'
+                            : 'bg-surface-container-highest/60 border-outline-variant text-on-surface'
+                        }`}>
+                          {prettyJson(item.result)}
+                        </pre>
+                      ) : (
+                        <p className="text-on-surface-variant/70 italic">
+                          {item.status === 'running' ? 'Still running…' : 'No output captured.'}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })
+        )}
       </div>
     </div>
   )

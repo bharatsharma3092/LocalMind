@@ -28,6 +28,7 @@ import { exportAllData, importAllData, exportConversation } from './data/manager
 import { searchWeb } from './websearch/service'
 import type { WebSearchProvider } from './websearch/service'
 import { getClaudeCodeProxySettings, getClaudeCodeProxyStatus, saveClaudeCodeProxySettings, startClaudeCodeProxy, stopClaudeCodeProxy } from './claude-code/proxy'
+import { getWorkspaceContext } from './workspaces/bootstrapper'
 
 const log = {
   info:  (tag: string, msg: string, data?: unknown) =>
@@ -49,6 +50,7 @@ const builtinAgents = [
     systemPrompt: [
       'You are the LocalMind Personal Assistant, a local-first autonomous agent platform.',
       'You operate over the user\'s active workspace and local computer environment. Utilize files, local script executions, web search, memory recall, and connected MCP servers to complete tasks autonomously.',
+      'You can launch a browser or website with the local__open_url tool, and start local desktop applications with the local__launch_app tool. For richer computer use (mouse, keyboard, screenshots), use the tools exposed by a connected computer-use or browser MCP server.',
       'Maintain a professional, concise, direct, and completely humble tone. Ground assertions strictly in observable data and facts.',
       'Prioritize user safety and privacy above all else. Never execute privileged operations without explicit user approval.',
     ].join('\n'),
@@ -66,7 +68,7 @@ const builtinAgents = [
     systemPrompt: [
       'You are Cowork, a collaborative software engineering agent inside LocalMind.',
       'You have full access to the local file system including any absolute path the user specifies (e.g. C:\\Users\\Bharat\\Downloads or any other drive/folder). Never refuse to access a path because it is outside a "project directory" — the user controls what paths are in scope.',
-      'Work like a careful pair programmer in the user-selected workspace folder: inspect files, search code, read documents, edit targeted changes, and run existing npm scripts when useful.',
+      'Work like a careful pair programmer in the user-selected workspace folder: generate repo maps, inspect files, search code, read documents, edit targeted changes, review git diffs, and run approved verification commands when useful.',
       'Clarify intent only when needed, propose practical next steps, and help the user move from idea to verified implementation.',
       'Prefer concrete actions, concise reasoning, and testable results. Before changing files, inspect the relevant code and keep edits scoped.',
       'Keep privacy in mind and avoid suggesting cloud services unless the user asks for them or the current provider is already cloud-based.',
@@ -84,8 +86,10 @@ const builtinAgents = [
     description: 'A coding agent for planning, editing, debugging, reviewing, testing, and running project workflows with local tools.',
     systemPrompt: [
       'You are Code, a local coding agent inside LocalMind with tools similar to a terminal coding assistant.',
-      'You can plan implementation, inspect the selected workspace folder, glob for paths, grep/search code, read text and Office/PDF files, edit/write files, delete paths after approval, run existing npm scripts, use MCP tools, and invoke LocalMind skills.',
+      'You can plan implementation, map the repository, glob for paths, grep/search code, read text and Office/PDF files, edit/write/patch files with checkpoints, inspect git status/diffs, run approved local commands or npm scripts, use MCP tools, and invoke LocalMind skills.',
       'Default to a practical engineering loop: understand the request, inspect relevant code, make focused edits, run verification, and summarize the outcome.',
+      'Use `local__repo_map` early on unfamiliar repositories. Prefer `local__edit_file` or `local__patch_file` over full rewrites for code changes.',
+      'Permission policy is enforced before side effects; explain risky write, shell, network, and delete actions clearly when approval is requested.',
       'For debugging and review, prioritize concrete bugs, failing paths, missing tests, and exact file references.',
       'Keep changes scoped and do not delete files unless the user approves the delete confirmation.',
     ].join('\n'),
@@ -455,6 +459,33 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           }
         }
 
+        if (request.workspacePath) {
+          const bootContext = await getWorkspaceContext(request.workspacePath)
+          const bootPromptParts = []
+          if (bootContext.localmind) bootPromptParts.push(`[Project Instructions]\n${bootContext.localmind}`)
+          if (bootContext.rules) bootPromptParts.push(`[Scoped Workspace Rules]\n${bootContext.rules}`)
+          if (bootContext.identity) bootPromptParts.push(`[Agent Identity Context]\n${bootContext.identity}`)
+          if (bootContext.soul) bootPromptParts.push(`[Agent Behavior Rules]\n${bootContext.soul}`)
+          if (bootContext.user) bootPromptParts.push(`[User Context]\n${bootContext.user}`)
+          if (bootContext.agents) bootPromptParts.push(`[Workspace Execution Rules]\n${bootContext.agents}`)
+          if (bootContext.tools) bootPromptParts.push(`[Workspace Tool Rules]\n${bootContext.tools}`)
+
+          if (bootPromptParts.length > 0) {
+            currentMessages = [
+              {
+                role: 'system',
+                content: bootPromptParts.join('\n\n'),
+              },
+              ...currentMessages,
+            ]
+            log.info('startStream', 'Workspace context injected into request', {
+              streamId,
+              workspacePath: request.workspacePath,
+              sections: bootPromptParts.length,
+            })
+          }
+        }
+
         const mcpTools = await getMcpToolsAsLlmTools()
         const isToolAgent = request.agentId === 'cowork' || request.agentId === 'code' || request.agentId === 'personal-assistant'
         const localTools = isToolAgent ? getLocalWorkspaceTools() : []
@@ -669,19 +700,26 @@ export function registerIpcHandlers(win: BrowserWindow): void {
               }
               sendChunk(browserWin, streamId, resultChunk)
 
-              toolResult = await executeLocalToolCall(tc, request.workspacePath, async (toolName, args) => {
-                const approvalId = `${toolName}:${Date.now()}`
-                win.webContents.send('agent:approvalRequest', {
-                  approvalId,
-                  agentId: request.agentId,
-                  toolName,
-                  args,
-                  description: 'This action can delete local workspace data and needs your approval.',
-                })
-                const decision = await new Promise<string>((resolve) => {
-                  pendingAgentApprovals.set(approvalId, resolve)
-                })
-                return decision === 'approved'
+              toolResult = await executeLocalToolCall(tc, request.workspacePath, {
+                sessionId: request.conversationId,
+                permissionMode: (appStore.get('agentPermissionMode' as any) as any) ?? 'balanced',
+                approvalHandler: async (toolName, args, details) => {
+                  const approvalId = `${toolName}:${Date.now()}`
+                  win.webContents.send('agent:approvalRequest', {
+                    approvalId,
+                    agentId: request.agentId,
+                    toolName,
+                    args,
+                    description: details?.reason ?? 'This local action requires your approval.',
+                    riskLevel: details?.riskLevel,
+                    category: details?.category,
+                    protectedPath: details?.protectedPath,
+                  })
+                  const decision = await new Promise<string>((resolve) => {
+                    pendingAgentApprovals.set(approvalId, resolve)
+                  })
+                  return decision === 'approved'
+                },
               })
             } else if (isWebSearchToolName(tc.name)) {
               log.info('startStream', `Executing web search tool: ${tc.name}`, { streamId })
@@ -692,7 +730,27 @@ export function registerIpcHandlers(win: BrowserWindow): void {
               }
               sendChunk(browserWin, streamId, resultChunk)
 
-              toolResult = await executeWebSearchToolCall(tc)
+              toolResult = await executeWebSearchToolCall(tc, {
+                sessionId: request.conversationId,
+                permissionMode: (appStore.get('agentPermissionMode' as any) as any) ?? 'balanced',
+                approvalHandler: async (toolName, args, details) => {
+                  const approvalId = `${toolName}:${Date.now()}`
+                  win.webContents.send('agent:approvalRequest', {
+                    approvalId,
+                    agentId: request.agentId,
+                    toolName,
+                    args,
+                    description: details?.reason ?? 'This network action requires your approval.',
+                    riskLevel: details?.riskLevel,
+                    category: details?.category,
+                    protectedPath: details?.protectedPath,
+                  })
+                  const decision = await new Promise<string>((resolve) => {
+                    pendingAgentApprovals.set(approvalId, resolve)
+                  })
+                  return decision === 'approved'
+                },
+              })
             } else if (tc.name.startsWith('skill__')) {
               log.info('startStream', `Executing LocalMind skill tool: ${tc.name}`, { streamId })
               const resultChunk: LLMStreamChunk = {

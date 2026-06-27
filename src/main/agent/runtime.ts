@@ -225,7 +225,7 @@ export class AgentRuntime {
 
       // --- 3. Dynamic Tool Ingestion ---
       const mcpTools = await getMcpToolsAsLlmTools()
-      const isToolAgent = request.agentId === 'cowork' || request.agentId === 'code'
+      const isToolAgent = request.agentId === 'cowork' || request.agentId === 'code' || request.agentId === 'personal-assistant'
       const localTools = isToolAgent ? getLocalWorkspaceTools() : []
       const webSearchTools = getWebSearchTools()
       const availableTools = [...mcpTools, ...localTools, ...webSearchTools]
@@ -328,28 +328,38 @@ export class AgentRuntime {
           if (isMcpToolName(tc.name)) {
             toolResult = await executeMcpToolCall(tc)
           } else if (isLocalToolName(tc.name)) {
-            toolResult = await executeLocalToolCall(tc, request.workspacePath, async (toolName, args) => {
-              const approvalId = `${toolName}:${Date.now()}`
-              win.webContents.send('agent:approvalRequest', {
-                approvalId,
-                agentId: request.agentId,
-                toolName,
-                args,
-                description: 'This local action requires your explicit approval.',
-              })
-              const decision = await new Promise<string>((resolve) => {
-                const handler = (_: any, data: { approvalId: string; decision: string }) => {
-                  if (data.approvalId === approvalId) {
-                    win.webContents.removeListener('agent:approvalResponse' as any, handler as any)
-                    resolve(data.decision)
+            toolResult = await executeLocalToolCall(tc, request.workspacePath, {
+              sessionId: request.conversationId,
+              permissionMode: (appStore.get('agentPermissionMode' as any) as any) ?? 'balanced',
+              approvalHandler: async (toolName, args, details) => {
+                const approvalId = `${toolName}:${Date.now()}`
+                win.webContents.send('agent:approvalRequest', {
+                  approvalId,
+                  agentId: request.agentId,
+                  toolName,
+                  args,
+                  description: details?.reason ?? 'This local action requires your explicit approval.',
+                  riskLevel: details?.riskLevel,
+                  category: details?.category,
+                  protectedPath: details?.protectedPath,
+                })
+                const decision = await new Promise<string>((resolve) => {
+                  const handler = (_: any, data: { approvalId: string; decision: string }) => {
+                    if (data.approvalId === approvalId) {
+                      win.webContents.removeListener('agent:approvalResponse' as any, handler as any)
+                      resolve(data.decision)
+                    }
                   }
-                }
-                win.webContents.on('agent:approvalResponse' as any, handler as any)
-              })
-              return decision === 'approved'
+                  win.webContents.on('agent:approvalResponse' as any, handler as any)
+                })
+                return decision === 'approved'
+              },
             })
           } else if (isWebSearchToolName(tc.name)) {
-            toolResult = await executeWebSearchToolCall(tc)
+            toolResult = await executeWebSearchToolCall(tc, {
+              sessionId: request.conversationId,
+              permissionMode: 'trusted',
+            })
           } else {
             toolResult = {
               role: 'tool',

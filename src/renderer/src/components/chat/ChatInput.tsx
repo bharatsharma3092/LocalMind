@@ -72,6 +72,24 @@ export function ChatInput({ conversationId, disabled = false, isLanding = false,
     })
   }, [])
 
+  // Allow quick-action starters (and other surfaces) to prefill and focus the prompt box.
+  useEffect(() => {
+    const handlePrefill = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail
+      if (typeof detail !== 'string') return
+      setInput(detail)
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (textarea) {
+          textarea.focus()
+          textarea.setSelectionRange(detail.length, detail.length)
+        }
+      })
+    }
+    window.addEventListener('localmind:prefill-input', handlePrefill)
+    return () => window.removeEventListener('localmind:prefill-input', handlePrefill)
+  }, [])
+
 
   useEffect(() => {
     const textarea = textareaRef.current

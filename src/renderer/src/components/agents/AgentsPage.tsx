@@ -39,7 +39,7 @@ const fallbackAgents: Agent[] = [
   {
     id: 'code',
     name: 'Code',
-    description: 'A coding agent with local file, glob, grep, edit, delete approval, npm script, MCP, and skill tools.',
+    description: 'A coding agent with repo map, file, glob, grep, patch, git, command approval, MCP, and skill tools.',
     systemPrompt: 'You are Code, a local coding agent inside LocalMind.',
     icon: 'terminal',
     category: 'Coding',
@@ -71,7 +71,7 @@ const quickStarts: Record<string, string[]> = {
 const agentPowers: Record<string, string[]> = {
   'personal-assistant': ['Workspace', 'Memory', 'Commitments', 'Email', 'Web Search', 'Tools'],
   cowork: ['Plan', 'Review', 'Debug', 'Test', 'Coordinate'],
-  code: ['Glob', 'Grep', 'Read', 'Write', 'Delete', 'NPM', 'MCP', 'Skills'],
+  code: ['Repo Map', 'Glob', 'Grep', 'Patch', 'Git', 'Commands', 'MCP', 'Skills'],
 }
 
 const EMPTY_MESSAGES: never[] = []

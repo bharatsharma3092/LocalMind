@@ -2,7 +2,8 @@ import { mcpHostManager } from '../mcp/host-manager'
 import { extractFileContent } from '../files/extractor'
 import { searchWeb } from '../websearch/service'
 import type { ToolDefinition, ToolCall } from '@shared/types/localmind-api'
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
+import { app, shell } from 'electron'
 import { promises as fs, existsSync, realpathSync } from 'fs'
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'path'
 import { promisify } from 'util'
@@ -28,6 +29,51 @@ const textExtensions = new Set([
   '.mjs', '.py', '.rs', '.sql', '.ts', '.tsx', '.txt', '.yaml', '.yml',
 ])
 const extractableExtensions = new Set(['.pdf', '.docx', '.pptx', '.xlsx'])
+
+type PermissionMode = 'safe' | 'balanced' | 'trusted' | 'custom'
+type ToolRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+type ToolCategory = 'read' | 'write' | 'delete' | 'shell' | 'network'
+
+interface LocalToolExecutionOptions {
+  sessionId?: string
+  permissionMode?: PermissionMode
+  approvalHandler?: (toolName: string, args: Record<string, any>, details?: ApprovalDetails) => Promise<boolean>
+}
+
+interface ApprovalDetails {
+  riskLevel: ToolRiskLevel
+  category: ToolCategory
+  reason: string
+  protectedPath?: boolean
+}
+
+interface PermissionDecision extends ApprovalDetails {
+  decision: 'allow' | 'ask' | 'deny'
+}
+
+const writeTools = new Set([
+  'local__write_file',
+  'local__write_spreadsheet',
+  'local__append_spreadsheet',
+  'local__write_document',
+  'local__append_document',
+  'local__edit_file',
+  'local__patch_file',
+])
+const deleteTools = new Set(['local__delete_path'])
+const shellTools = new Set(['local__run_npm_script', 'local__run_command', 'local__launch_app'])
+const networkTools = new Set(['web__search', 'local__open_url'])
+const protectedPathPatterns = [
+  '.env',
+  '.env.*',
+  '**/secrets/**',
+  '**/*.pem',
+  '**/*.key',
+  '**/.git/**',
+  '**/.ssh/**',
+  '**/credentials/**',
+  '**/auth/**',
+]
 
 function stripUnsupportedSchemaFields(obj: any): any {
   if (obj === null || typeof obj !== 'object') return obj
@@ -101,6 +147,231 @@ function wildcardToRegExp(pattern: string): RegExp {
   return new RegExp(`^${regex}$`, 'i')
 }
 
+function getUserDataPath(): string {
+  try {
+    return app.getPath('userData')
+  } catch {
+    return join(defaultWorkspaceRoot, '.localmind-runtime')
+  }
+}
+
+function normalizeForPolicy(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\.\//, '')
+}
+
+function pathMatchesPattern(pathValue: string, pattern: string): boolean {
+  const normalizedPath = normalizeForPolicy(pathValue)
+  const normalizedPattern = normalizeForPolicy(pattern)
+  return wildcardToRegExp(normalizedPattern).test(normalizedPath) || wildcardToRegExp(`**/${normalizedPattern}`).test(normalizedPath)
+}
+
+function isProtectedPath(pathValue: string | undefined, workspacePath?: string): boolean {
+  if (!pathValue) return false
+  const relativePath = normalizeForPolicy(isAbsolute(pathValue) ? toWorkspacePath(resolve(pathValue), workspacePath) : pathValue)
+  return protectedPathPatterns.some((pattern) => pathMatchesPattern(relativePath, pattern))
+}
+
+function getToolCategory(toolName: string): ToolCategory {
+  if (deleteTools.has(toolName)) return 'delete'
+  if (shellTools.has(toolName)) return 'shell'
+  if (writeTools.has(toolName)) return 'write'
+  if (networkTools.has(toolName)) return 'network'
+  return 'read'
+}
+
+function evaluatePermission(toolName: string, args: Record<string, any>, workspacePath: string | undefined, mode: PermissionMode): PermissionDecision {
+  const category = getToolCategory(toolName)
+  const targetPath = typeof args.path === 'string' ? args.path : undefined
+  const protectedPath = isProtectedPath(targetPath, workspacePath)
+
+  if (category === 'delete') {
+    return {
+      decision: 'ask',
+      category,
+      riskLevel: 'critical',
+      protectedPath,
+      reason: protectedPath ? 'Delete targets a protected path.' : 'Delete can remove local workspace data.',
+    }
+  }
+
+  if (protectedPath && (category === 'write' || category === 'shell')) {
+    return {
+      decision: mode === 'custom' ? 'deny' : 'ask',
+      category,
+      riskLevel: 'critical',
+      protectedPath,
+      reason: 'Action touches a protected path or secret-like location.',
+    }
+  }
+
+  if (mode === 'safe' && (category === 'write' || category === 'shell' || category === 'network')) {
+    return {
+      decision: 'ask',
+      category,
+      riskLevel: category === 'write' ? 'medium' : 'high',
+      protectedPath,
+      reason: 'Safe mode requires approval for writes, shell commands, and network calls.',
+    }
+  }
+
+  if (mode === 'balanced' && (category === 'shell' || category === 'network')) {
+    return {
+      decision: 'ask',
+      category,
+      riskLevel: 'high',
+      protectedPath,
+      reason: 'Balanced mode requires approval for shell commands and network calls.',
+    }
+  }
+
+  if (mode === 'custom' && category !== 'read') {
+    return {
+      decision: 'ask',
+      category,
+      riskLevel: category === 'write' ? 'medium' : 'high',
+      protectedPath,
+      reason: 'Custom policy mode asks for side-effecting actions unless a specific rule is added.',
+    }
+  }
+
+  return {
+    decision: 'allow',
+    category,
+    riskLevel: category === 'read' ? 'low' : 'medium',
+    protectedPath,
+    reason: `${mode} mode allows this ${category} action.`,
+  }
+}
+
+async function appendAuditLog(entry: Record<string, unknown>): Promise<void> {
+  try {
+    const auditDir = join(getUserDataPath(), 'audit')
+    await fs.mkdir(auditDir, { recursive: true })
+    const date = new Date().toISOString().slice(0, 10)
+    await fs.appendFile(join(auditDir, `${date}.log`), JSON.stringify({
+      timestamp: new Date().toISOString(),
+      ...entry,
+    }) + '\n', 'utf-8')
+  } catch (err) {
+    log.error('Failed to write permission audit log', err)
+  }
+}
+
+async function ensurePermission(
+  toolName: string,
+  args: Record<string, any>,
+  workspacePath: string | undefined,
+  options?: LocalToolExecutionOptions
+): Promise<PermissionDecision> {
+  const mode = options?.permissionMode ?? 'balanced'
+  const decision = evaluatePermission(toolName, args, workspacePath, mode)
+
+  if (decision.decision === 'deny') {
+    await appendAuditLog({
+      event: 'tool_permission',
+      sessionId: options?.sessionId ?? null,
+      tool: toolName,
+      policyMode: mode,
+      decision: 'denied',
+      reason: decision.reason,
+      args: sanitizeArgsForAudit(args),
+    })
+    throw new Error(`Permission denied for ${toolName}: ${decision.reason}`)
+  }
+
+  if (decision.decision === 'ask') {
+    const approved = options?.approvalHandler
+      ? await options.approvalHandler(toolName, args, decision)
+      : false
+    await appendAuditLog({
+      event: 'tool_permission',
+      sessionId: options?.sessionId ?? null,
+      tool: toolName,
+      policyMode: mode,
+      decision: approved ? 'approved' : 'denied',
+      reason: decision.reason,
+      args: sanitizeArgsForAudit(args),
+    })
+    if (!approved) {
+      throw new Error(`${toolName} was denied by the user`)
+    }
+  } else {
+    await appendAuditLog({
+      event: 'tool_permission',
+      sessionId: options?.sessionId ?? null,
+      tool: toolName,
+      policyMode: mode,
+      decision: 'allowed',
+      reason: decision.reason,
+      args: sanitizeArgsForAudit(args),
+    })
+  }
+
+  return decision
+}
+
+function sanitizeArgsForAudit(args: Record<string, any>): Record<string, any> {
+  const sanitized: Record<string, any> = {}
+  for (const [key, value] of Object.entries(args)) {
+    if (/key|token|secret|password/i.test(key)) {
+      sanitized[key] = '[redacted]'
+    } else if (typeof value === 'string' && value.length > 600) {
+      sanitized[key] = `${value.slice(0, 600)}...`
+    } else {
+      sanitized[key] = value
+    }
+  }
+  return sanitized
+}
+
+async function checkpointPath(filePath: string, workspacePath: string | undefined, sessionId?: string): Promise<string | null> {
+  try {
+    const checkpointRoot = join(getUserDataPath(), 'checkpoints', sessionId ?? 'anonymous', String(Date.now()))
+    await fs.mkdir(checkpointRoot, { recursive: true })
+    const relPath = toWorkspacePath(filePath, workspacePath)
+    const manifest = {
+      timestamp: new Date().toISOString(),
+      workspacePath: workspacePath ?? null,
+      path: relPath,
+      existed: existsSync(filePath),
+    }
+
+    if (manifest.existed) {
+      const safeName = relPath.replace(/[\\/:"*?<>|]+/g, '__')
+      const stats = await fs.stat(filePath)
+      if (stats.isDirectory()) {
+        const files = await walkFiles(filePath, 500, workspacePath)
+        const filesRoot = join(checkpointRoot, 'files')
+        await fs.mkdir(filesRoot, { recursive: true })
+        for (const relFile of files) {
+          const absFile = resolveWorkspacePath(relFile, workspacePath)
+          const safeFileName = relFile.replace(/[\\/:"*?<>|]+/g, '__')
+          await fs.copyFile(absFile, join(filesRoot, safeFileName))
+        }
+      } else {
+        await fs.copyFile(filePath, join(checkpointRoot, safeName))
+      }
+    }
+
+    await fs.writeFile(join(checkpointRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8')
+    return checkpointRoot
+  } catch (err) {
+    log.error('Checkpoint creation failed', err)
+    return null
+  }
+}
+
+function sanitizeProcessEnv(): Record<string, string> {
+  const envAllowlist = ['PATH', 'APPDATA', 'USERPROFILE', 'LANG', 'LC_ALL', 'TEMP', 'TMP', 'HOME', 'SystemRoot', 'COMSPEC', 'PATHEXT']
+  const sanitizedEnv: Record<string, string> = {}
+  for (const key of envAllowlist) {
+    if (process.env[key] !== undefined) {
+      sanitizedEnv[key] = process.env[key]!
+    }
+  }
+  return sanitizedEnv
+}
+
 async function walkFiles(root: string, maxFiles: number, workspacePath?: string): Promise<string[]> {
   const results: string[] = []
 
@@ -123,6 +394,60 @@ async function walkFiles(root: string, maxFiles: number, workspacePath?: string)
   return results
 }
 
+async function readJsonFile(filePath: string): Promise<any | null> {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf-8'))
+  } catch {
+    return null
+  }
+}
+
+function detectStack(files: string[]): string[] {
+  const stack = new Set<string>()
+  const names = new Set(files.map((file) => normalizeForPolicy(file).toLowerCase()))
+
+  if (names.has('package.json')) stack.add('node')
+  if ([...names].some((file) => file.endsWith('.ts') || file.endsWith('.tsx'))) stack.add('typescript')
+  if ([...names].some((file) => file.endsWith('.jsx') || file.endsWith('.tsx'))) stack.add('react')
+  if (names.has('electron.vite.config.ts') || names.has('electron.vite.config.js')) stack.add('electron')
+  if (names.has('vite.config.ts') || names.has('vite.config.js')) stack.add('vite')
+  if (names.has('vitest.config.ts') || names.has('vitest.config.js')) stack.add('vitest')
+  if ([...names].some((file) => file.endsWith('.py'))) stack.add('python')
+  if (names.has('pyproject.toml')) stack.add('python-package')
+  if ([...names].some((file) => file.endsWith('.csproj'))) stack.add('dotnet')
+  if (names.has('cargo.toml')) stack.add('rust')
+  if (names.has('go.mod')) stack.add('go')
+
+  return Array.from(stack)
+}
+
+async function generateRepoMap(workspacePath: string | undefined, maxFiles: number): Promise<Record<string, any>> {
+  const workspaceRoot = getWorkspaceRoot(workspacePath)
+  const files = await walkFiles(workspaceRoot, Math.min(maxFiles, 2000), workspacePath)
+  const packageJson = await readJsonFile(join(workspaceRoot, 'package.json'))
+  const instructionFiles = ['LOCALMIND.md', 'AGENTS.md', 'CLAUDE.md', '.localmind/AGENTS.md', '.localmind/TOOLS.md']
+    .filter((file) => files.includes(file))
+  const importantFiles = files.filter((file) => {
+    const normalized = normalizeForPolicy(file)
+    return /(^|\/)(package\.json|tsconfig.*\.json|electron\.vite\.config\.[jt]s|vite\.config\.[jt]s|vitest\.config\.[jt]s|README\.md|LOCALMIND\.md|AGENTS\.md|CLAUDE\.md)$/i.test(normalized)
+  }).slice(0, 80)
+  const entryPoints = files.filter((file) => /(^|\/)(main|index|App)\.(ts|tsx|js|jsx)$/i.test(file)).slice(0, 80)
+  const testFiles = files.filter((file) => /\.(test|spec)\.(ts|tsx|js|jsx|py)$/i.test(file)).slice(0, 80)
+  const topDirectories = Array.from(new Set(files.map((file) => normalizeForPolicy(file).split('/')[0]).filter(Boolean))).slice(0, 80)
+
+  return {
+    workspaceRoot,
+    fileCountScanned: files.length,
+    detectedStack: detectStack(files),
+    packageScripts: packageJson?.scripts ?? {},
+    topDirectories,
+    importantFiles,
+    instructionFiles,
+    entryPoints,
+    testFiles,
+  }
+}
+
 export function getLocalWorkspaceTools(): ToolDefinition[] {
   return [
     {
@@ -135,6 +460,19 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
           properties: {
             path: { type: 'string', description: 'Workspace-relative directory path. Defaults to the workspace root.' },
             maxFiles: { type: 'number', description: 'Maximum files to return. Defaults to 100.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__repo_map',
+        description: 'Generate a concise repository map with detected stack, commands, important files, instructions, and test entry points.',
+        parameters: {
+          type: 'object',
+          properties: {
+            maxFiles: { type: 'number', description: 'Maximum workspace files to inspect. Defaults to 400.' },
           },
         },
       },
@@ -321,6 +659,31 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
     {
       type: 'function',
       function: {
+        name: 'local__patch_file',
+        description: 'Apply multiple exact text replacements to one text file. Use this for multi-hunk targeted code changes.',
+        parameters: {
+          type: 'object',
+          required: ['path', 'replacements'],
+          properties: {
+            path: { type: 'string', description: 'Workspace-relative file path.' },
+            replacements: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['oldText', 'newText'],
+                properties: {
+                  oldText: { type: 'string' },
+                  newText: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'local__delete_path',
         description: 'Delete a workspace file or directory. This requires explicit user approval at action time.',
         parameters: {
@@ -336,6 +699,31 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
     {
       type: 'function',
       function: {
+        name: 'local__git_status',
+        description: 'Run git status --short inside the workspace.',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__git_diff',
+        description: 'Run git diff inside the workspace, optionally scoped to a file.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Optional workspace-relative file path to diff.' },
+            staged: { type: 'boolean', description: 'Use --staged to show staged changes. Defaults to false.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'local__run_npm_script',
         description: 'Run an existing npm script from package.json in the current workspace.',
         parameters: {
@@ -343,6 +731,51 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
           required: ['script'],
           properties: {
             script: { type: 'string', description: 'Script name from package.json, such as build or test:unit.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__run_command',
+        description: 'Run a non-interactive local command with an executable and argument array. Requires approval and uses a sanitized environment.',
+        parameters: {
+          type: 'object',
+          required: ['command'],
+          properties: {
+            command: { type: 'string', description: 'Executable name or absolute path, such as git, node, npm, or python.' },
+            args: { type: 'array', items: { type: 'string' }, description: 'Command arguments as separate strings.' },
+            timeoutMs: { type: 'number', description: 'Timeout in milliseconds. Defaults to 120000.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__open_url',
+        description: 'Open a web URL in the user\'s default browser. Use this to launch a browser and navigate to a website. Only http(s) URLs are allowed.',
+        parameters: {
+          type: 'object',
+          required: ['url'],
+          properties: {
+            url: { type: 'string', description: 'The full http(s) URL to open, such as https://example.com.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__launch_app',
+        description: 'Launch a local desktop application or executable (such as a browser, editor, or other program) detached and non-blocking. Use this to start GUI apps. For opening a website, prefer local__open_url.',
+        parameters: {
+          type: 'object',
+          required: ['command'],
+          properties: {
+            command: { type: 'string', description: 'Executable name or absolute path, such as chrome, msedge, notepad, or an absolute path to an .exe.' },
+            args: { type: 'array', items: { type: 'string' }, description: 'Arguments to pass to the application, such as a URL or file path.' },
           },
         },
       },
@@ -469,7 +902,8 @@ export function isWebSearchToolName(name: string): boolean {
 }
 
 export async function executeWebSearchToolCall(
-  toolCall: ToolCall
+  toolCall: ToolCall,
+  options?: LocalToolExecutionOptions
 ): Promise<{ role: 'tool'; content: string; toolCallId: string }> {
   let args: Record<string, any> = {}
   try {
@@ -487,6 +921,7 @@ export async function executeWebSearchToolCall(
     }
   }
 
+  await ensurePermission(toolCall.name, args, undefined, options)
   const result = await searchWeb(query)
   return {
     role: 'tool',
@@ -498,7 +933,7 @@ export async function executeWebSearchToolCall(
 export async function executeLocalToolCall(
   toolCall: ToolCall,
   workspacePath?: string,
-  approvalHandler?: (toolName: string, args: Record<string, any>) => Promise<boolean>
+  approvalHandlerOrOptions?: ((toolName: string, args: Record<string, any>, details?: ApprovalDetails) => Promise<boolean>) | LocalToolExecutionOptions
 ): Promise<{ role: 'tool'; content: string; toolCallId: string }> {
   let args: Record<string, any> = {}
   try {
@@ -507,12 +942,24 @@ export async function executeLocalToolCall(
     args = {}
   }
 
+  const options: LocalToolExecutionOptions =
+    typeof approvalHandlerOrOptions === 'function'
+      ? { approvalHandler: approvalHandlerOrOptions }
+      : (approvalHandlerOrOptions ?? {})
+
   try {
+    await ensurePermission(toolCall.name, args, workspacePath, options)
+
     if (toolCall.name === 'local__list_files') {
       const workspaceRoot = getWorkspaceRoot(workspacePath)
       const root = resolveWorkspacePath(args.path ?? '.', workspacePath)
       const files = await walkFiles(root, Math.min(Number(args.maxFiles) || 100, 500), workspacePath)
       return { role: 'tool', content: JSON.stringify({ workspaceRoot, files }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__repo_map') {
+      const repoMap = await generateRepoMap(workspacePath, Number(args.maxFiles) || 400)
+      return { role: 'tool', content: JSON.stringify(repoMap), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__glob') {
@@ -591,45 +1038,50 @@ export async function executeLocalToolCall(
 
     if (toolCall.name === 'local__write_file') {
       const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
+      const checkpoint = await checkpointPath(filePath, workspacePath, options.sessionId)
       await fs.mkdir(dirname(filePath), { recursive: true })
       await fs.writeFile(filePath, String(args.content ?? ''), 'utf-8')
-      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), bytes: Buffer.byteLength(String(args.content ?? ''), 'utf-8') }), toolCallId: toolCall.id }
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), bytes: Buffer.byteLength(String(args.content ?? ''), 'utf-8'), checkpoint }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__write_spreadsheet') {
       const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
       const data = args.data as any[][]
       if (!data || !Array.isArray(data)) throw new Error('data must be a 2D array')
+      const checkpoint = await checkpointPath(filePath, workspacePath, options.sessionId)
       const { writeXlsx } = await import('../files/rich-writer')
       await writeXlsx(filePath, data, args.sheetName)
-      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true }), toolCallId: toolCall.id }
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true, checkpoint }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__append_spreadsheet') {
       const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
       const data = args.data as any[][]
       if (!data || !Array.isArray(data)) throw new Error('data must be a 2D array')
+      const checkpoint = await checkpointPath(filePath, workspacePath, options.sessionId)
       const { appendXlsx } = await import('../files/rich-writer')
       await appendXlsx(filePath, data, args.sheetName)
-      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true }), toolCallId: toolCall.id }
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true, checkpoint }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__write_document') {
       const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
       const elements = args.elements as any[]
       if (!elements || !Array.isArray(elements)) throw new Error('elements must be an array')
+      const checkpoint = await checkpointPath(filePath, workspacePath, options.sessionId)
       const { writeDocx } = await import('../files/rich-writer')
       await writeDocx(filePath, elements)
-      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true }), toolCallId: toolCall.id }
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true, checkpoint }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__append_document') {
       const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
       const elements = args.elements as any[]
       if (!elements || !Array.isArray(elements)) throw new Error('elements must be an array')
+      const checkpoint = await checkpointPath(filePath, workspacePath, options.sessionId)
       const { appendDocx } = await import('../files/rich-writer')
       await appendDocx(filePath, elements)
-      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true }), toolCallId: toolCall.id }
+      return { role: 'tool', content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), success: true, checkpoint }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__edit_file') {
@@ -640,42 +1092,79 @@ export async function executeLocalToolCall(
       const current = await fs.readFile(filePath, 'utf-8')
       if (!current.includes(oldText)) throw new Error(`oldText was not found in ${args.path}`)
       const next = args.replaceAll ? current.split(oldText).join(newText) : current.replace(oldText, newText)
+      const checkpoint = await checkpointPath(filePath, workspacePath, options.sessionId)
       await fs.writeFile(filePath, next, 'utf-8')
       return {
         role: 'tool',
         content: JSON.stringify({
           path: toWorkspacePath(filePath, workspacePath),
           replacements: args.replaceAll ? current.split(oldText).length - 1 : 1,
+          checkpoint,
         }),
         toolCallId: toolCall.id,
       }
     }
 
-    if (toolCall.name === 'local__delete_path') {
-      if (!approvalHandler || !(await approvalHandler(toolCall.name, args))) {
-        return {
-          role: 'tool',
-          content: JSON.stringify({ error: 'Delete was denied or not approved by the user' }),
-          toolCallId: toolCall.id,
-        }
+    if (toolCall.name === 'local__patch_file') {
+      const filePath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
+      const replacements = args.replacements as Array<{ oldText?: string; newText?: string }>
+      if (!Array.isArray(replacements) || replacements.length === 0) throw new Error('replacements must be a non-empty array')
+      let current = await fs.readFile(filePath, 'utf-8')
+      let applied = 0
+      for (const replacement of replacements) {
+        const oldText = String(replacement.oldText ?? '')
+        const newText = String(replacement.newText ?? '')
+        if (!oldText) throw new Error('Each replacement requires oldText')
+        if (!current.includes(oldText)) throw new Error(`oldText was not found in ${args.path}`)
+        current = current.replace(oldText, newText)
+        applied++
       }
+      const checkpoint = await checkpointPath(filePath, workspacePath, options.sessionId)
+      await fs.writeFile(filePath, current, 'utf-8')
+      return {
+        role: 'tool',
+        content: JSON.stringify({ path: toWorkspacePath(filePath, workspacePath), replacements: applied, checkpoint }),
+        toolCallId: toolCall.id,
+      }
+    }
 
+    if (toolCall.name === 'local__delete_path') {
       const targetPath = resolveWorkspacePath(String(args.path ?? ''), workspacePath)
       if (toWorkspacePath(targetPath, workspacePath) === '.') throw new Error('Refusing to delete the workspace root')
       const stats = await fs.stat(targetPath)
+      const checkpoint = await checkpointPath(targetPath, workspacePath, options.sessionId)
       await fs.rm(targetPath, { recursive: Boolean(args.recursive) && stats.isDirectory(), force: false })
-      return { role: 'tool', content: JSON.stringify({ deleted: toWorkspacePath(targetPath, workspacePath) }), toolCallId: toolCall.id }
+      return { role: 'tool', content: JSON.stringify({ deleted: toWorkspacePath(targetPath, workspacePath), checkpoint }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__git_status') {
+      const workspaceRoot = getWorkspaceRoot(workspacePath)
+      const gitCommand = process.platform === 'win32' ? 'git.exe' : 'git'
+      const result = await execFileAsync(gitCommand, ['status', '--short'], {
+        cwd: workspaceRoot,
+        timeout: 30000,
+        maxBuffer: 1024 * 1024,
+        env: sanitizeProcessEnv(),
+      })
+      return { role: 'tool', content: JSON.stringify({ stdout: result.stdout, stderr: result.stderr }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__git_diff') {
+      const workspaceRoot = getWorkspaceRoot(workspacePath)
+      const gitCommand = process.platform === 'win32' ? 'git.exe' : 'git'
+      const gitArgs = ['diff']
+      if (args.staged) gitArgs.push('--staged')
+      if (args.path) gitArgs.push('--', toWorkspacePath(resolveWorkspacePath(String(args.path), workspacePath), workspacePath))
+      const result = await execFileAsync(gitCommand, gitArgs, {
+        cwd: workspaceRoot,
+        timeout: 30000,
+        maxBuffer: 1024 * 1024,
+        env: sanitizeProcessEnv(),
+      })
+      return { role: 'tool', content: JSON.stringify({ stdout: result.stdout, stderr: result.stderr }), toolCallId: toolCall.id }
     }
 
     if (toolCall.name === 'local__run_npm_script') {
-      if (!approvalHandler || !(await approvalHandler(toolCall.name, args))) {
-        return {
-          role: 'tool',
-          content: JSON.stringify({ error: 'NPM script execution was denied by the user' }),
-          toolCallId: toolCall.id,
-        }
-      }
-
       const workspaceRoot = getWorkspaceRoot(workspacePath)
       const packageJsonPath = resolveWorkspacePath('package.json', workspacePath)
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'))
@@ -683,23 +1172,69 @@ export async function executeLocalToolCall(
       if (!packageJson.scripts?.[script]) throw new Error(`npm script not found: ${script}`)
       
       const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-      
-      // Sanitized environment variables allowlist to prevent API key leaks
-      const envAllowlist = ['PATH', 'APPDATA', 'USERPROFILE', 'LANG', 'LC_ALL', 'TEMP', 'TMP', 'HOME', 'SystemRoot', 'COMSPEC']
-      const sanitizedEnv: Record<string, string> = {}
-      for (const key of envAllowlist) {
-        if (process.env[key] !== undefined) {
-          sanitizedEnv[key] = process.env[key]!
-        }
-      }
 
       const result = await execFileAsync(npmCommand, ['run', script], {
         cwd: workspaceRoot,
         timeout: 120000, // 2 minutes hard limit
         maxBuffer: 1024 * 1024,
-        env: sanitizedEnv,
+        env: sanitizeProcessEnv(),
       })
       return { role: 'tool', content: JSON.stringify({ stdout: result.stdout, stderr: result.stderr }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__run_command') {
+      const workspaceRoot = getWorkspaceRoot(workspacePath)
+      const command = String(args.command ?? '').trim()
+      if (!command) throw new Error('command is required')
+      if (/[&|;<>()]/.test(command)) throw new Error('command must be an executable name or path, not a shell expression')
+      const commandArgs = Array.isArray(args.args) ? args.args.map((item) => String(item)) : []
+      const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || 120000, 1000), 300000)
+      const result = await execFileAsync(command, commandArgs, {
+        cwd: workspaceRoot,
+        timeout: timeoutMs,
+        maxBuffer: 1024 * 1024,
+        env: sanitizeProcessEnv(),
+      })
+      return { role: 'tool', content: JSON.stringify({ stdout: result.stdout, stderr: result.stderr }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__open_url') {
+      const url = String(args.url ?? '').trim()
+      if (!url) throw new Error('url is required')
+      if (!/^https?:\/\//i.test(url)) throw new Error('Only http(s) URLs are allowed')
+      await shell.openExternal(url)
+      return { role: 'tool', content: JSON.stringify({ success: true, opened: url }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__launch_app') {
+      const command = String(args.command ?? '').trim()
+      if (!command) throw new Error('command is required')
+      if (/[&|;<>()]/.test(command)) throw new Error('command must be an executable name or path, not a shell expression')
+      const appArgs = Array.isArray(args.args) ? args.args.map((item) => String(item)) : []
+      const child = spawn(command, appArgs, {
+        cwd: getWorkspaceRoot(workspacePath),
+        env: sanitizeProcessEnv(),
+        detached: true,
+        stdio: 'ignore',
+      })
+      // Surface immediate spawn failures (e.g. executable not found) instead of silently resolving.
+      const launchError = await new Promise<string | null>((resolve) => {
+        let settled = false
+        child.once('error', (err) => {
+          if (settled) return
+          settled = true
+          resolve(err.message)
+        })
+        setTimeout(() => {
+          if (settled) return
+          settled = true
+          resolve(null)
+        }, 400)
+      })
+      if (launchError) throw new Error(`Failed to launch "${command}": ${launchError}`)
+      const pid = child.pid
+      child.unref()
+      return { role: 'tool', content: JSON.stringify({ success: true, launched: command, args: appArgs, pid }), toolCallId: toolCall.id }
     }
 
     return {

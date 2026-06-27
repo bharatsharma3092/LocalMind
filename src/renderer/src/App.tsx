@@ -11,6 +11,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { ArtifactPanel } from './components/artifacts/ArtifactPanel'
 import { McpPermissionDialog } from './components/mcp/McpPermissionDialog'
 import { AgentToolPermissionDialog } from './components/agents/AgentToolPermissionDialog'
+import { CommandPalette } from './components/layout/CommandPalette'
 import { useSettingsStore } from './stores/settingsStore'
 import { useProviderStore } from './stores/providerStore'
 import { usePersonaStore } from './stores/personaStore'
@@ -55,15 +56,39 @@ function App() {
     setCurrentPage(page)
   }
 
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+
   return (
     <ErrorBoundary>
       <div className="h-screen w-full overflow-hidden flex text-on-background bg-background">
-        <Sidebar
-          currentPage={currentPage}
-          onNavigate={handleNavigate}
-          onSettingsClick={() => setCurrentPage('settings')}
-        />
-        <div className="flex-1 flex flex-col h-full overflow-hidden md:ml-[260px]">
+        {/* Left panel — navigation (hideable) */}
+        {sidebarOpen ? (
+          <div className="relative w-[248px] shrink-0 h-full hidden md:block">
+            <Sidebar
+              currentPage={currentPage}
+              onNavigate={handleNavigate}
+              onSettingsClick={() => setCurrentPage('settings')}
+            />
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="absolute top-2.5 right-2 w-7 h-7 rounded-md flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition-colors z-10"
+              title="Hide sidebar"
+            >
+              <span className="material-symbols-outlined text-[18px]">left_panel_close</span>
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="hidden md:flex absolute top-2.5 left-2 z-50 w-7 h-7 rounded-md items-center justify-center text-on-surface-variant hover:text-on-surface bg-surface-container border border-outline-variant transition-colors"
+            title="Show sidebar"
+          >
+            <span className="material-symbols-outlined text-[18px]">left_panel_open</span>
+          </button>
+        )}
+
+        {/* Center panel — workspace */}
+        <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
           {currentPage === 'chat' && (
             <ChatView
               currentPage={currentPage}
@@ -86,6 +111,14 @@ function App() {
         <ToastContainer />
         <McpPermissionDialog />
         <AgentToolPermissionDialog />
+        <CommandPalette
+          onNavigate={handleNavigate}
+          onNewChat={() => {
+            clearActiveConversation()
+            useChatStore.getState().createConversation({})
+            setCurrentPage('chat')
+          }}
+        />
       </div>
     </ErrorBoundary>
   )

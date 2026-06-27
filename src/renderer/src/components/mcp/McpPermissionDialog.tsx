@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 interface ApprovalRequest {
   approvalId: string
@@ -28,9 +29,15 @@ export function McpPermissionDialog() {
     setPending(null)
   }
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface rounded-xl shadow-2xl w-full max-w-md border border-border">
+  return createPortal(
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[80] p-4"
+      style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh' }}
+    >
+      <div
+        className="bg-surface rounded-xl shadow-2xl w-full max-w-md border border-border"
+        style={{ width: '100%', maxWidth: '28rem', maxHeight: '90vh', overflowY: 'auto' }}
+      >
         <div className="p-4 border-b border-border">
           <h3 className="text-sm font-semibold">MCP Tool Approval</h3>
         </div>
@@ -78,6 +85,7 @@ export function McpPermissionDialog() {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

@@ -2,6 +2,19 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
 
 const templates = {
+  'LOCALMIND.md': [
+    '# LOCALMIND',
+    '',
+    '## Project Instructions',
+    '- Treat this repository as the active LocalMind workspace.',
+    '- Inspect relevant files before editing.',
+    '- Keep changes focused and run the smallest useful verification command after edits.',
+    '- Respect protected files such as `.env`, credentials, keys, and secrets.',
+    '',
+    '## Imported Instructions',
+    '<!-- LocalMind will preserve imported AGENTS.md or CLAUDE.md content below when bootstrapping a new workspace. -->',
+  ].join('\n'),
+
   'IDENTITY.md': [
     '# IDENTITY',
     '',
@@ -72,36 +85,60 @@ export async function bootstrapWorkspace(rootPath: string): Promise<void> {
   }
 
   const dotLocalmindDir = join(rootPath, '.localmind')
+  const rulesDir = join(dotLocalmindDir, 'rules')
 
   if (!existsSync(dotLocalmindDir)) {
     mkdirSync(dotLocalmindDir, { recursive: true })
   }
+  if (!existsSync(rulesDir)) {
+    mkdirSync(rulesDir, { recursive: true })
+  }
 
   // Create default templates if missing
   for (const [filename, content] of Object.entries(templates)) {
-    const filePath = join(dotLocalmindDir, filename)
+    const filePath = filename === 'LOCALMIND.md' ? join(rootPath, filename) : join(dotLocalmindDir, filename)
     if (!existsSync(filePath)) {
-      writeFileSync(filePath, content, 'utf-8')
+      let nextContent = content
+      if (filename === 'LOCALMIND.md') {
+        const importedSections: string[] = []
+        for (const importedName of ['AGENTS.md', 'CLAUDE.md']) {
+          const importedPath = join(rootPath, importedName)
+          if (existsSync(importedPath)) {
+            importedSections.push([
+              '',
+              `### Imported from ${importedName}`,
+              '',
+              readFileSync(importedPath, 'utf-8').trim(),
+            ].join('\n'))
+          }
+        }
+        nextContent += importedSections.join('\n')
+      }
+      writeFileSync(filePath, nextContent, 'utf-8')
       console.log(`[Bootstrapper] Templated new file at: ${filePath}`)
     }
   }
 }
 
 export interface WorkspaceContext {
+  localmind: string
   identity: string
   soul: string
   user: string
   agents: string
   tools: string
+  rules: string
 }
 
 export async function getWorkspaceContext(rootPath: string): Promise<WorkspaceContext> {
   const context: WorkspaceContext = {
+    localmind: '',
     identity: '',
     soul: '',
     user: '',
     agents: '',
     tools: '',
+    rules: '',
   }
 
   if (!rootPath || !existsSync(rootPath)) {
@@ -111,14 +148,17 @@ export async function getWorkspaceContext(rootPath: string): Promise<WorkspaceCo
   const dotLocalmindDir = join(rootPath, '.localmind')
 
   const filesMap: Record<keyof WorkspaceContext, string> = {
+    localmind: 'LOCALMIND.md',
     identity: 'IDENTITY.md',
     soul: 'SOUL.md',
     user: 'USER.md',
     agents: 'AGENTS.md',
     tools: 'TOOLS.md',
+    rules: '',
   }
 
   for (const [key, filename] of Object.entries(filesMap) as [keyof WorkspaceContext, string][]) {
+    if (key === 'rules') continue
     // 1. Try reading from root of workspace first (for backward compatibility / power-user overrides)
     const rootPathFile = join(rootPath, filename)
     if (existsSync(rootPathFile)) {
@@ -131,6 +171,16 @@ export async function getWorkspaceContext(rootPath: string): Promise<WorkspaceCo
     if (existsSync(hiddenPathFile)) {
       context[key] = readFileSync(hiddenPathFile, 'utf-8')
     }
+  }
+
+  const rulesDir = join(dotLocalmindDir, 'rules')
+  if (existsSync(rulesDir)) {
+    const { readdirSync } = await import('fs')
+    context.rules = readdirSync(rulesDir)
+      .filter((file) => file.endsWith('.md'))
+      .slice(0, 20)
+      .map((file) => [`# Rule: ${file}`, readFileSync(join(rulesDir, file), 'utf-8')].join('\n'))
+      .join('\n\n')
   }
 
   return context
