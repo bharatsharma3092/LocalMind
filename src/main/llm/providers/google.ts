@@ -373,6 +373,29 @@ export class GoogleProvider implements LLMProvider {
     }
   }
 
+  /** Full catalog of Gemini models that support generateContent. */
+  async listCatalog(): Promise<ModelInfo[]> {
+    try {
+      const apiKey = await this.getApiKey()
+      const response = await fetch(`${this.baseUrl}/models?key=${apiKey}&pageSize=200`)
+      if (!response.ok) return []
+      const data = await response.json()
+      return (data.models ?? [])
+        .filter((m: any) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
+        .map((m: any) => ({
+          id: m.name.replace('models/', ''),
+          name: m.displayName ?? m.name.replace('models/', ''),
+          provider: 'google' as const,
+          contextWindow: m.inputTokenLimit ?? 32768,
+          supportsVision: true,
+          supportsToolUse: true,
+        }))
+        .sort((a: ModelInfo, b: ModelInfo) => a.id.localeCompare(b.id))
+    } catch {
+      return []
+    }
+  }
+
   async validateConfig(): Promise<boolean> {
     try {
       const apiKey = await this.getApiKey()

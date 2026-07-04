@@ -20,6 +20,7 @@ const builtinProviders = [
   { key: 'openai', label: 'OpenAI' },
   { key: 'openrouter', label: 'OpenRouter' },
   { key: 'google', label: 'Google' },
+  { key: 'cloudflare', label: 'Cloudflare' },
 ]
 
 interface ModelSelectorProps {

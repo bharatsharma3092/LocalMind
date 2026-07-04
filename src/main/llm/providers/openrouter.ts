@@ -156,6 +156,33 @@ export class OpenRouterProvider implements LLMProvider {
     }
   }
 
+  /** Full OpenRouter catalog (all models, sorted by id). */
+  async listCatalog(): Promise<ModelInfo[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/models`)
+      if (!response.ok) return []
+      const data = await response.json()
+      return (data.data ?? [])
+        .map((m: any) => ({
+          id: m.id,
+          name: m.name ?? m.id,
+          provider: 'openrouter' as const,
+          contextWindow: m.context_length ?? 4096,
+          costPer1MTokens: m.pricing
+            ? {
+                input: Math.round((m.pricing.prompt ?? 0) * 1_000_000),
+                output: Math.round((m.pricing.completion ?? 0) * 1_000_000),
+              }
+            : undefined,
+          supportsVision: (m.architecture?.modality ?? '').includes('image'),
+          supportsToolUse: true,
+        }))
+        .sort((a: ModelInfo, b: ModelInfo) => a.id.localeCompare(b.id))
+    } catch {
+      return []
+    }
+  }
+
   async validateConfig(): Promise<boolean> {
     try {
       const apiKey = await this.getApiKey()

@@ -92,6 +92,32 @@ function describeAction(name: string, argsStr: string): ActionDescriptor {
       return { icon: 'terminal', title: 'Run command', detail: [args.command, ...(Array.isArray(args.args) ? args.args : [])].filter(Boolean).join(' '), group: 'Command' }
     case 'web__search':
       return { icon: 'travel_explore', title: 'Search the web', detail: String(args.query ?? ''), group: 'Search' }
+    case 'local__browser_open':
+      return { icon: 'language', title: 'Browse', detail: String(args.url ?? ''), group: 'Browser' }
+    case 'local__browser_read':
+      return { icon: 'menu_book', title: 'Read page', detail: 'current browser page', group: 'Browser' }
+    case 'local__browser_click':
+      return { icon: 'ads_click', title: 'Click', detail: String(args.target ?? ''), group: 'Browser' }
+    case 'local__browser_type':
+      return { icon: 'keyboard', title: 'Type', detail: String(args.selector ?? ''), group: 'Browser' }
+    case 'local__browser_screenshot':
+      return { icon: 'photo_camera', title: 'Screenshot', detail: 'current browser page', group: 'Browser' }
+    case 'local__browser_close':
+      return { icon: 'close', title: 'Close browser', detail: '', group: 'Browser' }
+    case 'local__browser_back':
+      return { icon: 'arrow_back', title: 'Go back', detail: 'browser history', group: 'Browser' }
+    case 'local__browser_forward':
+      return { icon: 'arrow_forward', title: 'Go forward', detail: 'browser history', group: 'Browser' }
+    case 'local__browser_reload':
+      return { icon: 'refresh', title: 'Reload page', detail: '', group: 'Browser' }
+    case 'local__browser_scroll':
+      return { icon: 'swap_vert', title: 'Scroll', detail: String(args.direction ?? 'down'), group: 'Browser' }
+    case 'local__browser_wait':
+      return { icon: 'hourglass_empty', title: 'Wait', detail: String(args.target ?? ''), group: 'Browser' }
+    case 'local__browser_links':
+      return { icon: 'link', title: 'List links', detail: 'current browser page', group: 'Browser' }
+    case 'local__browser_press_key':
+      return { icon: 'keyboard', title: 'Press key', detail: String(args.key ?? ''), group: 'Browser' }
     default:
       return { icon: 'bolt', title: name.replace(/^local__/, '').replace(/_/g, ' '), detail: '', group: 'Tool' }
   }

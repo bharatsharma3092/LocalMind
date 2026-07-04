@@ -256,6 +256,43 @@ export function runMigrations(): void {
     updated_at INTEGER NOT NULL
   )`)
 
+  // --- Phase 1 (AI OS) additive migrations ---
+
+  // Memory embedding metadata columns (additive)
+  const memoryColumns = sqlite
+    .exec('PRAGMA table_info(memories)')[0]
+    ?.values.map((row: unknown[]) => String(row[1])) ?? []
+
+  if (!memoryColumns.includes('embedding_model')) {
+    sqlite.run('ALTER TABLE memories ADD COLUMN embedding_model TEXT')
+  }
+  if (!memoryColumns.includes('embedding_status')) {
+    sqlite.run("ALTER TABLE memories ADD COLUMN embedding_status TEXT DEFAULT 'absent'")
+  }
+
+  // Background task scheduler tables
+  sqlite.run(`CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id TEXT PRIMARY KEY NOT NULL,
+    type TEXT NOT NULL,
+    trigger_json TEXT NOT NULL,
+    params_json TEXT,
+    enabled INTEGER DEFAULT 1,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+
+  sqlite.run(`CREATE TABLE IF NOT EXISTS task_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    task_id TEXT NOT NULL REFERENCES scheduled_tasks(id),
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER NOT NULL,
+    result TEXT,
+    error TEXT
+  )`)
+
   // Save initial DB to disk
   persistDatabase()
 }

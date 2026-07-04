@@ -36,6 +36,20 @@ export interface AppSettings {
     sourceConversationId?: string
     createdAt: number
   }[]
+  cloudflareAccountId?: string
+  cloudflareModels?: {
+    id: string
+    name?: string
+    contextWindow?: number
+  }[]
+  /** Agent browser backend: 'embedded' = LocalMind's Chromium window; 'cdp' = your real Chrome/Edge over DevTools Protocol. */
+  browserMode?: 'embedded' | 'cdp'
+  cdpHost?: string
+  cdpPort?: number
+  /** Optional path to chrome.exe / msedge.exe used to auto-launch a debuggable browser in CDP mode. */
+  cdpBrowserPath?: string
+  /** Ollama model used for local RAG embeddings (must be pulled, e.g. `ollama pull nomic-embed-text`). */
+  ragEmbeddingModel?: string
   claudeCodeProxy?: {
     enabled: boolean
     port: number
@@ -71,6 +85,7 @@ const defaults: AppSettings = {
   memoryEnabled: true,
   memories: [],
   shortTermMemories: [],
+  ragEmbeddingModel: 'nomic-embed-text',
   claudeCodeProxy: {
     enabled: false,
     port: 4000,

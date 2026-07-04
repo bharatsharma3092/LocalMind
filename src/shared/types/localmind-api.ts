@@ -6,7 +6,7 @@ export interface IPCResponse<T = void> {
 }
 
 // ─── LLM ──────────────────────────────────────────
-export type ProviderType = 'ollama' | 'openrouter' | 'google' | 'openai' | 'custom'
+export type ProviderType = 'ollama' | 'openrouter' | 'google' | 'openai' | 'custom' | 'cloudflare'
 
 export interface CustomProviderConfig {
   id: string
@@ -112,6 +112,7 @@ export interface LLMApi {
   startStream: (req: LLMRequest) => Promise<IPCResponse<{ streamId: string }>>
   cancelStream: (streamId: string) => Promise<void>
   listModels: (provider: string) => Promise<IPCResponse<ModelInfo[]>>
+  listProviderCatalog: (provider: string) => Promise<IPCResponse<ModelInfo[]>>
   fetchCustomModels: (data: { baseUrl: string; apiKey?: string; apiFormat?: 'openai' | 'anthropic' }) => Promise<IPCResponse<{ id: string; name: string; contextWindow?: number }[]>>
   refinePrompt: (req: LLMRequest & { prompt: string }) => Promise<IPCResponse<string>>
   transcribe: (data: { audio: number[]; provider: string; customProviderId?: string }) => Promise<IPCResponse<string>>
@@ -202,12 +203,27 @@ export interface ArtifactApi {
   getVersions: (id: string) => Promise<IPCResponse<any[]>>
 }
 
+export interface GitInfo {
+  isRepo: boolean
+  folderName: string
+  branch: string | null
+  detached: boolean
+  isWorktree: boolean
+  additions: number
+  deletions: number
+  changedFiles: number
+  untracked: number
+  ahead: number
+  behind: number
+}
+
 export interface WorkspaceApi {
   create: (data: any) => Promise<IPCResponse<void>>
   list: () => Promise<IPCResponse<any[]>>
   update: (id: string, data: any) => Promise<IPCResponse<void>>
   delete: (id: string) => Promise<IPCResponse<void>>
   setActive: (id: string) => Promise<IPCResponse<void>>
+  gitInfo: (rootPath: string) => Promise<IPCResponse<GitInfo>>
 }
 
 export interface Persona {
@@ -270,6 +286,25 @@ export interface ClaudeProxyApi {
   status: () => Promise<IPCResponse<any>>
 }
 
+export interface MemoryApi {
+  list: () => Promise<{ success: boolean; data?: any[]; error?: string }>
+  create: (input: { content: string; kind?: string; sourceConversationId?: string }) => Promise<{ success: boolean; data?: any; error?: string }>
+  update: (id: string, content: string) => Promise<{ success: boolean; data?: any; error?: string }>
+  delete: (id: string) => Promise<{ success: boolean; error?: string }>
+  setEnabled: (id: string, enabled: boolean) => Promise<{ success: boolean; data?: any; error?: string }>
+  recall: (query: string, opts?: { limit?: number; timeoutMs?: number }) => Promise<{ success: boolean; data?: any[]; error?: string }>
+  status: () => Promise<{ success: boolean; data?: { total: number; withEmbedding: number; enabled: number; semanticReady: boolean }; error?: string }>
+}
+
+export interface OkfApi {
+  import: () => Promise<{ success: boolean; data?: { canceled?: boolean; imported?: number; skipped?: number }; error?: string }>
+  export: () => Promise<{ success: boolean; data?: { canceled?: boolean; exported?: number; bundleDir?: string }; error?: string }>
+}
+
+export interface BrowserApi {
+  testCdp: (opts: { host?: string; port?: number; browserPath?: string }) => Promise<{ success: boolean; data?: { ok: boolean; message: string }; error?: string }>
+}
+
 export interface LocalMindAPI {
   llm: LLMApi
   db: DbApi
@@ -287,6 +322,9 @@ export interface LocalMindAPI {
   url: UrlApi
   websearch: WebSearchApi
   claudeProxy: ClaudeProxyApi
+  memory: MemoryApi
+  okf: OkfApi
+  browser: BrowserApi
 }
 
 declare global {

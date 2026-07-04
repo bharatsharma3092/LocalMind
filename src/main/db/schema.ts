@@ -133,8 +133,34 @@ export const memories = sqliteTable('memories', {
   importanceScore: real('importance_score').default(0.5),
   sourceConversationId: text('source_conversation_id').references(() => conversations.id),
   enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  // Phase 1 (AI OS) — additive embedding metadata. The vector itself lives in the vectra index.
+  embeddingModel: text('embedding_model'),
+  embeddingStatus: text('embedding_status').default('absent'), // 'absent' | 'present' | 'stale'
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
+})
+
+// Phase 1 (AI OS) — Background task scheduler
+export const scheduledTasks = sqliteTable('scheduled_tasks', {
+  id: text('id').primaryKey(),
+  type: text('type').notNull(),
+  triggerJson: text('trigger_json').notNull(), // serialized Trigger
+  paramsJson: text('params_json'),
+  enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  nextRunAt: integer('next_run_at'),
+  lastRunAt: integer('last_run_at'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+})
+
+export const taskRuns = sqliteTable('task_runs', {
+  id: text('id').primaryKey(),
+  taskId: text('task_id').references(() => scheduledTasks.id).notNull(),
+  status: text('status').notNull(), // 'succeeded' | 'failed'
+  startedAt: integer('started_at').notNull(),
+  endedAt: integer('ended_at').notNull(),
+  result: text('result'),
+  error: text('error'),
 })
 
 export const commitments = sqliteTable('commitments', {

@@ -206,35 +206,46 @@ export function MessageBubble({ message, branchCount = 1, branchIndex = 0, onBra
             </div>
           </details>
         )}
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            code({ className, children, ...props }: any) {
-              const match = /language-(\w+)/.exec(className || '')
-              const codeString = String(children).replace(/\n$/, '')
-              if (match) {
-                return <CodeBlock language={match[1]} code={codeString} />
-              }
-              return (
-                <code className="font-mono text-[0.92em] bg-tertiary-fixed text-on-tertiary-fixed border border-tertiary-fixed-dim/60 px-1.5 py-0.5 rounded-md" {...props}>
-                  {children}
-                </code>
-              )
-            },
-            a({ href, children, ...props }: any) {
-              return (
-                <a href={href} target="_blank" rel="noreferrer" {...props}>
-                  {children}
-                </a>
-              )
-            },
-          }}
-        >
-          {renderedMessage.discussion || (message.isStreaming ? 'Working...' : '')}
-        </ReactMarkdown>
-        {message.isStreaming && (
-          <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1 rounded-sm" />
-        )}
+        {renderedMessage.discussion ? (
+          <>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                code({ className, children, ...props }: any) {
+                  const match = /language-(\w+)/.exec(className || '')
+                  const codeString = String(children).replace(/\n$/, '')
+                  if (match) {
+                    return <CodeBlock language={match[1]} code={codeString} />
+                  }
+                  return (
+                    <code className="font-mono text-[0.92em] bg-tertiary-fixed text-on-tertiary-fixed border border-tertiary-fixed-dim/60 px-1.5 py-0.5 rounded-md" {...props}>
+                      {children}
+                    </code>
+                  )
+                },
+                a({ href, children, ...props }: any) {
+                  return (
+                    <a href={href} target="_blank" rel="noreferrer" {...props}>
+                      {children}
+                    </a>
+                  )
+                },
+              }}
+            >
+              {renderedMessage.discussion}
+            </ReactMarkdown>
+            {message.isStreaming && (
+              <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1 rounded-sm align-middle" />
+            )}
+          </>
+        ) : message.isStreaming ? (
+          <span className="inline-flex items-center gap-1.5 text-on-surface-variant" aria-label="Thinking">
+            <span className="material-symbols-outlined text-[18px] text-primary lm-thinking-pulse">psychology</span>
+            <span className="lm-thinking-dot" />
+            <span className="lm-thinking-dot" style={{ animationDelay: '0.18s' }} />
+            <span className="lm-thinking-dot" style={{ animationDelay: '0.36s' }} />
+          </span>
+        ) : null}
       </div>
     )
   }

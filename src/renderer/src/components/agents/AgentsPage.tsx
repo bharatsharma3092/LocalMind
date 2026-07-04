@@ -9,6 +9,7 @@ import type { AppPage } from '../sidebar/Sidebar'
 import { WorkspaceSwitcher } from '../workspaces/WorkspaceSwitcher'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { TraceHUD } from '../chat/TraceHUD'
+import { WorkspaceStatusBar } from './WorkspaceStatusBar'
 import { useProviderStore } from '../../stores/providerStore'
 
 const fallbackAgents: Agent[] = [
@@ -306,6 +307,15 @@ export function AgentsPage({ currentPage, onNavigate }: Props) {
             </button>
           </div>
         </header>
+
+        {activeWorkspacePath && (
+          <div className="flex h-9 shrink-0 items-center gap-2 overflow-x-auto border-b border-outline-variant bg-surface-container-lowest/60 px-6 scrollbar-thin">
+            <WorkspaceStatusBar
+              workspacePath={activeWorkspacePath}
+              refreshToken={currentMessages.length}
+            />
+          </div>
+        )}
 
         <section className="min-h-0 flex-1 flex overflow-hidden">
           <div className="relative flex-1 flex h-full min-h-0 min-w-0 flex-col overflow-hidden">

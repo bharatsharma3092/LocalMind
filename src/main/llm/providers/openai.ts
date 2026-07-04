@@ -168,6 +168,32 @@ export class OpenAIProvider implements LLMProvider {
     }
   }
 
+  /** Full catalog of chat-capable models (excludes embeddings/audio/image/moderation). */
+  async listCatalog(): Promise<ModelInfo[]> {
+    try {
+      const apiKey = await this.getApiKey()
+      const response = await fetch(`${this.baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      })
+      if (!response.ok) return []
+      const data = await response.json()
+      const nonChatRegex = /(embedding|whisper|tts|audio|dall-e|moderation|image|realtime|transcribe)/i
+      return (data.data ?? [])
+        .filter((m: any) => typeof m.id === 'string' && /^(gpt|o[1-9]|chatgpt)/i.test(m.id) && !nonChatRegex.test(m.id))
+        .map((m: any) => ({
+          id: m.id,
+          name: m.id,
+          provider: 'openai' as const,
+          contextWindow: 128000,
+          supportsVision: true,
+          supportsToolUse: true,
+        }))
+        .sort((a: ModelInfo, b: ModelInfo) => a.id.localeCompare(b.id))
+    } catch {
+      return []
+    }
+  }
+
   async validateConfig(): Promise<boolean> {
     try {
       const apiKey = await this.getApiKey()

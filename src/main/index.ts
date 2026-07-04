@@ -3,6 +3,7 @@ import { join } from 'path'
 import { appStore } from './settings/app-store'
 import { initDatabase, runMigrations, closeDatabase } from './db/connection'
 import { registerIpcHandlers } from './ipc'
+import { memoryService } from './memory/memory-service'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -32,6 +33,15 @@ if (!gotTheLock) {
     } catch (err) {
       console.error('DB init failed:', err)
     }
+
+    // Phase 1 — init memory service BEFORE creating the window so migration
+    // completes and IPC handlers have real data when the renderer first loads.
+    try {
+      await memoryService.init()
+    } catch (err) {
+      console.error('[MemoryService] Init failed (continuing):', err)
+    }
+
     createWindow()
     session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
       callback(permission === 'media' || permission === 'audioCapture')
@@ -137,6 +147,7 @@ function registerGlobalShortcut(): void {
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
+    memoryService.flush().catch(() => {})
     closeDatabase()
   })
 }

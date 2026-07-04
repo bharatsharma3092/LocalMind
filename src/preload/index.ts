@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('localmind', {
     startStream: (req: any) => ipcRenderer.invoke('llm:startStream', req),
     cancelStream: (streamId: string) => ipcRenderer.invoke('llm:cancelStream', streamId),
     listModels: (provider: string) => ipcRenderer.invoke('llm:listModels', provider),
+    listProviderCatalog: (provider: string) => ipcRenderer.invoke('llm:listProviderCatalog', provider),
     fetchCustomModels: (data: { baseUrl: string; apiKey?: string }) => ipcRenderer.invoke('llm:fetchCustomModels', data),
     refinePrompt: (req: any) => ipcRenderer.invoke('llm:refinePrompt', req),
     estimateCost: (req: any) => ipcRenderer.invoke('llm:estimateCost', req),
@@ -126,6 +127,7 @@ contextBridge.exposeInMainWorld('localmind', {
     update: (id: string, data: any) => ipcRenderer.invoke('workspace:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('workspace:delete', id),
     setActive: (id: string) => ipcRenderer.invoke('workspace:setActive', id),
+    gitInfo: (rootPath: string) => ipcRenderer.invoke('workspace:gitInfo', rootPath),
   },
 
   persona: {
@@ -190,5 +192,27 @@ contextBridge.exposeInMainWorld('localmind', {
   secrets: {
     get: (service: string) => ipcRenderer.invoke('secrets:get', service),
     set: (service: string, value: string) => ipcRenderer.invoke('secrets:set', service, value),
+  },
+
+  memory: {
+    list: () => ipcRenderer.invoke('memory:list'),
+    create: (input: { content: string; kind?: string; sourceConversationId?: string }) =>
+      ipcRenderer.invoke('memory:create', input),
+    update: (id: string, content: string) => ipcRenderer.invoke('memory:update', id, content),
+    delete: (id: string) => ipcRenderer.invoke('memory:delete', id),
+    setEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('memory:setEnabled', id, enabled),
+    recall: (query: string, opts?: { limit?: number; timeoutMs?: number }) =>
+      ipcRenderer.invoke('memory:recall', query, opts),
+    status: () => ipcRenderer.invoke('memory:status'),
+  },
+
+  okf: {
+    import: () => ipcRenderer.invoke('okf:import'),
+    export: () => ipcRenderer.invoke('okf:export'),
+  },
+
+  browser: {
+    testCdp: (opts: { host?: string; port?: number; browserPath?: string }) =>
+      ipcRenderer.invoke('browser:testCdp', opts),
   },
 })

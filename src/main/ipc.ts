@@ -15,7 +15,10 @@ import { extractContextWindow } from './llm/providers/custom'
 import type { ToolCall } from '@shared/types/localmind-api'
 import { mcpHostManager, type MCPServerConfig, reconnectSavedServers } from './mcp/host-manager'
 import { registerApprovalIpcHandlers } from './mcp/approval'
-import { getMcpToolsAsLlmTools, getLocalWorkspaceTools, getSkillTools, getWebSearchTools, executeMcpToolCall, executeLocalToolCall, executeWebSearchToolCall, isMcpToolName, isLocalToolName, isWebSearchToolName } from './llm/tool-executor'
+import { getMcpToolsAsLlmTools, getLocalWorkspaceTools, getSkillTools, getWebSearchTools, getRagTools, executeMcpToolCall, executeLocalToolCall, executeWebSearchToolCall, executeRagToolCall, isMcpToolName, isLocalToolName, isWebSearchToolName, isRagToolName } from './llm/tool-executor'
+import { memoryService, MemoryNotFoundError, MemoryValidationError } from './memory/memory-service'
+import { importOkfBundle, exportOkfBundle } from './knowledge/okf-manager'
+import { testCdpConnection } from './browser/cdp'
 import { loadBuiltinSkills, getAllSkills, addSkill, removeSkill, type SkillManifest } from './skills/loader'
 import { runSkill } from './skills/runner'
 import { extractFileContent, extractFolderContents } from './files/extractor'
@@ -51,7 +54,9 @@ const builtinAgents = [
       'You are the LocalMind Personal Assistant, a local-first autonomous agent platform.',
       'You operate over the user\'s active workspace and local computer environment. Utilize files, local script executions, web search, memory recall, and connected MCP servers to complete tasks autonomously.',
       'You can launch a browser or website with the local__open_url tool, and start local desktop applications with the local__launch_app tool. For richer computer use (mouse, keyboard, screenshots), use the tools exposed by a connected computer-use or browser MCP server.',
+      'To actually browse the web and act on pages, use the browser tools: local__browser_open (navigate and read a page), local__browser_read (re-read the current page), local__browser_click (click a link/button by text or CSS selector), local__browser_type (fill an input, optionally submit), and local__browser_screenshot. Read the page after each action before deciding the next step, and close the browser with local__browser_close when done.',
       'Maintain a professional, concise, direct, and completely humble tone. Ground assertions strictly in observable data and facts.',
+      'CRITICAL — Agent Tool Loop: You run inside a tool-calling loop. After every tool result, re-evaluate whether the user\'s request is FULLY addressed. If not, call the next tool immediately. Do NOT stop mid-task. Execute ALL steps of a multi-step instruction before giving a final answer. If you produced text but there are still pending actions, continue using tools.',
       'Prioritize user safety and privacy above all else. Never execute privileged operations without explicit user approval.',
     ].join('\n'),
     icon: 'smart_toy',
@@ -71,6 +76,8 @@ const builtinAgents = [
       'Work like a careful pair programmer in the user-selected workspace folder: generate repo maps, inspect files, search code, read documents, edit targeted changes, review git diffs, and run approved verification commands when useful.',
       'Clarify intent only when needed, propose practical next steps, and help the user move from idea to verified implementation.',
       'Prefer concrete actions, concise reasoning, and testable results. Before changing files, inspect the relevant code and keep edits scoped.',
+'CRITICAL — Agent Tool Loop: You run inside a tool-calling loop. After every tool result, re-evaluate whether the user\'s request is FULLY addressed. If not, call the next tool immediately. Do NOT stop mid-task. Execute ALL steps (inspect → edit → verify) before giving a final answer. If you produced text but there are still pending actions, continue using tools.',
+      'You can browse the web when needed using the browser tools: local__browser_open (navigate + read), local__browser_read, local__browser_click, local__browser_type, and local__browser_screenshot; read the page after each action and call local__browser_close when finished.',
       'Keep privacy in mind and avoid suggesting cloud services unless the user asks for them or the current provider is already cloud-based.',
     ].join('\n'),
     icon: 'groups',
@@ -90,6 +97,7 @@ const builtinAgents = [
       'Default to a practical engineering loop: understand the request, inspect relevant code, make focused edits, run verification, and summarize the outcome.',
       'Use `local__repo_map` early on unfamiliar repositories. Prefer `local__edit_file` or `local__patch_file` over full rewrites for code changes.',
       'Permission policy is enforced before side effects; explain risky write, shell, network, and delete actions clearly when approval is requested.',
+'CRITICAL — Agent Tool Loop: You run inside a tool-calling loop. After every tool result, re-evaluate whether the user\'s request is FULLY addressed. If not, call the next tool immediately. Do NOT stop mid-task. Execute ALL steps (understand → inspect → edit → verify → summarize) before giving a final answer. If you produced text but there are still pending actions, continue using tools.',
       'For debugging and review, prioritize concrete bugs, failing paths, missing tests, and exact file references.',
       'Keep changes scoped and do not delete files unless the user approves the delete confirmation.',
     ].join('\n'),
@@ -177,12 +185,83 @@ function getMemorySystemPrompt(): string | null {
   }
 
   if (lines.length === 0) return null
+  return wrapMemoryLines(lines)
+}
+
+function wrapMemoryLines(lines: string[]): string {
   return [
     'Use this private LocalMind profile and memory context to personalize responses when relevant.',
     'Do not reveal these stored details unless the user asks about memory or profile settings.',
     'Never claim memory files are deleted or reset unless the provided context explicitly says so.',
     ...lines,
   ].join('\n')
+}
+
+/**
+ * Build the per-turn memory context using the persistent Memory Layer (SQLite +
+ * semantic/lexical recall), falling back to the legacy electron-store path on error.
+ * This is the integration point that makes the new memory layer actually used in chat.
+ */
+async function buildMemoryContext(userText: string): Promise<string | null> {
+  const memoryEnabled = appStore.get('memoryEnabled') ?? true
+  const profile = appStore.get('userProfile') as any
+  const lines: string[] = []
+
+  if (profile?.displayName?.trim()) lines.push(`The user's name is ${profile.displayName.trim()}.`)
+  if (profile?.email?.trim()) lines.push(`The user's email is ${profile.email.trim()}.`)
+
+  if (!memoryEnabled) {
+    lines.push('Stored user memory recall is currently turned off in LocalMind settings.')
+    return wrapMemoryLines(lines)
+  }
+
+  // Query-relevant recall from the persistent Memory Layer (semantic when embeddings exist, else lexical).
+  try {
+    if (userText && userText.trim().length > 0) {
+      const recalled = await memoryService.recall(userText, { limit: 8 })
+      if (recalled.length > 0) {
+        lines.push('Relevant stored memory:')
+        for (const r of recalled) {
+          lines.push(`- ${r.record.content.trim().replace(/\s+/g, ' ').slice(0, 600)}`)
+        }
+      }
+    }
+  } catch (err: any) {
+    log.warn('memory', 'MemoryService recall failed; using legacy memory prompt', err?.message ?? err)
+    return getMemorySystemPrompt()
+  }
+
+  // Rolling short-term task memory (from settings) remains as a recent-activity hint.
+  const shortTermMemories = ((appStore.get('shortTermMemories' as any) as StoredShortTermMemory[]) ?? []).filter(
+    (m) => m?.content?.trim()
+  )
+  if (shortTermMemories.length > 0) {
+    lines.push('Recent Personal Assistant task memory:')
+    for (const m of shortTermMemories.slice(0, 12)) lines.push(`- ${m.content.trim()}`)
+  }
+
+  if (lines.length === 0) return null
+  return wrapMemoryLines(lines)
+}
+
+/** Persist auto-extracted durable memories into the Memory Layer (embedded + recallable). */
+async function persistLongTermMemories(contents: string[]): Promise<void> {
+  const cleaned = contents
+    .map((c) => c.trim().replace(/^\s*[-*]\s*/, ''))
+    .filter((c) => c.length >= 8)
+  if (cleaned.length === 0) return
+  try {
+    const existing = await memoryService.list()
+    const seen = new Set(existing.map((m) => m.content.trim().toLowerCase()))
+    for (const content of cleaned) {
+      if (seen.has(content.toLowerCase())) continue
+      seen.add(content.toLowerCase())
+      await memoryService.create({ content, kind: 'semantic' })
+    }
+  } catch (err: any) {
+    log.warn('memory', 'Persisting long-term memory to Memory Layer failed; using legacy store', err?.message ?? err)
+    addLongTermMemories(cleaned)
+  }
 }
 
 function getLastUserText(messages: LLMRequest['messages']): string {
@@ -305,7 +384,7 @@ async function rememberPersonalAssistantTurn(request: LLMRequest, userPrompt: st
   }
 
   addShortTermMemory(shortTermTask, request.conversationId)
-  addLongTermMemories(longTermMemories)
+  await persistLongTermMemories(longTermMemories)
 }
 
 async function listAgents(): Promise<LocalMindAgent[]> {
@@ -331,9 +410,185 @@ async function getAgent(agentId: string): Promise<LocalMindAgent | undefined> {
   return (await listAgents()).find((agent) => agent.id === agentId && agent.enabled)
 }
 
+export interface GitInfo {
+  isRepo: boolean
+  folderName: string
+  branch: string | null
+  detached: boolean
+  isWorktree: boolean
+  additions: number
+  deletions: number
+  changedFiles: number
+  untracked: number
+  ahead: number
+  behind: number
+}
+
+async function getGitInfo(rootPath: string): Promise<GitInfo> {
+  const { execFile } = await import('child_process')
+  const { promisify } = await import('util')
+  const { basename, resolve } = await import('path')
+  const run = promisify(execFile)
+
+  const folderName = rootPath ? basename(resolve(rootPath)) : ''
+  const empty: GitInfo = {
+    isRepo: false,
+    folderName,
+    branch: null,
+    detached: false,
+    isWorktree: false,
+    additions: 0,
+    deletions: 0,
+    changedFiles: 0,
+    untracked: 0,
+    ahead: 0,
+    behind: 0,
+  }
+  if (!rootPath) return empty
+
+  const gitCommand = process.platform === 'win32' ? 'git.exe' : 'git'
+  const git = async (args: string[]): Promise<string> => {
+    const { stdout } = await run(gitCommand, args, { cwd: rootPath, timeout: 10000, maxBuffer: 4 * 1024 * 1024 })
+    return stdout.trim()
+  }
+  const gitSafe = async (args: string[]): Promise<string | null> => {
+    try {
+      return await git(args)
+    } catch {
+      return null
+    }
+  }
+
+  const inside = await gitSafe(['rev-parse', '--is-inside-work-tree'])
+  if (inside !== 'true') return empty
+
+  // Branch (or short SHA when detached)
+  let branch = await gitSafe(['symbolic-ref', '--short', 'HEAD'])
+  let detached = false
+  if (!branch) {
+    detached = true
+    branch = await gitSafe(['rev-parse', '--short', 'HEAD'])
+  }
+
+  // Linked worktree detection: git-dir differs from git-common-dir
+  const gitDir = await gitSafe(['rev-parse', '--absolute-git-dir'])
+  const commonDir = await gitSafe(['rev-parse', '--git-common-dir'])
+  const isWorktree = Boolean(gitDir && commonDir && resolve(gitDir) !== resolve(rootPath, commonDir))
+
+  // Changes vs HEAD (staged + unstaged, tracked files)
+  let additions = 0
+  let deletions = 0
+  let changedFiles = 0
+  const numstat = await gitSafe(['diff', '--numstat', 'HEAD'])
+  if (numstat) {
+    for (const line of numstat.split('\n')) {
+      const [add, del] = line.split('\t')
+      if (add === undefined) continue
+      changedFiles += 1
+      if (add !== '-') additions += Number(add) || 0
+      if (del !== '-') deletions += Number(del) || 0
+    }
+  }
+
+  // Untracked files (not counted in numstat)
+  const untrackedOut = await gitSafe(['ls-files', '--others', '--exclude-standard'])
+  const untracked = untrackedOut ? untrackedOut.split('\n').filter(Boolean).length : 0
+
+  // Ahead / behind upstream
+  let ahead = 0
+  let behind = 0
+  const counts = await gitSafe(['rev-list', '--left-right', '--count', '@{u}...HEAD'])
+  if (counts) {
+    const [b, a] = counts.split(/\s+/)
+    behind = Number(b) || 0
+    ahead = Number(a) || 0
+  }
+
+  return {
+    isRepo: true,
+    folderName,
+    branch,
+    detached,
+    isWorktree,
+    additions,
+    deletions,
+    changedFiles,
+    untracked,
+    ahead,
+    behind,
+  }
+}
+
 export function registerIpcHandlers(win: BrowserWindow): void {
 
   registerApprovalIpcHandlers(win)
+
+  // --- Phase 1: Memory Layer --------------------------------------------------
+
+  ipcMain.handle('memory:list', safeHandle(async () => {
+    return await memoryService.list()
+  }))
+
+  ipcMain.handle('memory:create', safeHandle(async (_, input: { content: string; kind?: string; sourceConversationId?: string }) => {
+    return await memoryService.create(input)
+  }))
+
+  ipcMain.handle('memory:update', safeHandle(async (_, id: string, content: string) => {
+    return await memoryService.update(id, content)
+  }))
+
+  ipcMain.handle('memory:delete', safeHandle(async (_, id: string) => {
+    await memoryService.delete(id)
+    return undefined
+  }))
+
+  ipcMain.handle('memory:setEnabled', safeHandle(async (_, id: string, enabled: boolean) => {
+    return await memoryService.setEnabled(id, enabled)
+  }))
+
+  ipcMain.handle('memory:recall', safeHandle(async (_, query: string, opts?: { limit?: number; timeoutMs?: number }) => {
+    return await memoryService.recall(query, opts)
+  }))
+
+  ipcMain.handle('memory:status', safeHandle(async () => {
+    const all = await memoryService.list()
+    const total = all.length
+    const withEmbedding = all.filter((m) => m.embeddingStatus === 'present').length
+    const enabled = all.filter((m) => m.enabled).length
+    return { total, withEmbedding, enabled, semanticReady: withEmbedding > 0 }
+  }))
+
+  // --- Phase 1: OKF (Open Knowledge Format) bundles ---------------------------
+
+  ipcMain.handle('okf:import', safeHandle(async () => {
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: 'Select an OKF knowledge bundle folder to import',
+    })
+    if (result.canceled || result.filePaths.length === 0) return { canceled: true }
+    const imported = await importOkfBundle(result.filePaths[0])
+    return { canceled: false, ...imported }
+  }))
+
+  ipcMain.handle('okf:export', safeHandle(async () => {
+    const result = await dialog.showSaveDialog(win, {
+      title: 'Export memories as an OKF bundle',
+      defaultPath: 'localmind-knowledge',
+      buttonLabel: 'Export Bundle',
+    })
+    if (result.canceled || !result.filePath) return { canceled: true }
+    const exported = await exportOkfBundle(result.filePath)
+    return { canceled: false, ...exported }
+  }))
+
+  // --- Agent browser (CDP) ----------------------------------------------------
+
+  ipcMain.handle('browser:testCdp', safeHandle(async (_, opts: { host?: string; port?: number; browserPath?: string }) => {
+    const host = opts?.host?.trim() || '127.0.0.1'
+    const port = Number(opts?.port) || 9222
+    const browserPath = opts?.browserPath?.trim() || undefined
+    return await testCdpConnection(host, port, browserPath)
+  }))
 
   // --- Web Search ------------------------------------------------------------
   ipcMain.handle('websearch:search', safeHandle(async (_, query: string) => {
@@ -397,7 +652,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         const originalUserPrompt = getLastUserText(request.messages)
         let assistantTranscript = ''
         const executedToolNames: string[] = []
-        const memoryPrompt = getMemorySystemPrompt()
+        const memoryPrompt = await buildMemoryContext(originalUserPrompt)
         if (memoryPrompt) {
           currentMessages = [
             {
@@ -492,7 +747,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         const enabledSkills = isToolAgent ? (await getAllSkillsForTools()) : []
         const skillTools = isToolAgent ? getSkillTools(enabledSkills) : []
         const webSearchTools = getWebSearchTools()
-        const availableTools = [...mcpTools, ...localTools, ...skillTools, ...webSearchTools]
+        // RAG retrieval is offered to any chat; getRagTools() returns [] when no documents are indexed.
+        const ragTools = getRagTools()
+        const availableTools = [...mcpTools, ...localTools, ...skillTools, ...webSearchTools, ...ragTools]
         if (availableTools.length > 0) {
           log.info('startStream', `Injecting ${availableTools.length} tools into request`, {
             streamId,
@@ -761,6 +1018,16 @@ export function registerIpcHandlers(win: BrowserWindow): void {
               sendChunk(browserWin, streamId, resultChunk)
 
               toolResult = await executeSkillToolCall(tc, request)
+            } else if (isRagToolName(tc.name)) {
+              log.info('startStream', `Executing RAG retrieval tool: ${tc.name}`, { streamId })
+              const resultChunk: LLMStreamChunk = {
+                type: 'tool_result',
+                toolCall: tc,
+                content: 'Searching documents...',
+              }
+              sendChunk(browserWin, streamId, resultChunk)
+
+              toolResult = await executeRagToolCall(tc)
             } else {
               toolResult = {
                 role: 'tool',
@@ -833,6 +1100,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     llmRouter.reloadCustomProviders()
     const models = await llmRouter.listModels(provider)
     log.info('listModels', 'Models fetched', { provider, count: models?.length })
+    return models
+  }))
+
+  ipcMain.handle('llm:listProviderCatalog', safeHandle(async (_, provider: string) => {
+    log.info('listProviderCatalog', 'Fetching full model catalog', { provider })
+    const models = await llmRouter.listProviderCatalog(provider)
+    log.info('listProviderCatalog', 'Catalog fetched', { provider, count: models?.length })
     return models
   }))
 
@@ -1889,6 +2163,10 @@ ipcMain.handle('db:searchConversations', safeHandle(async (_, query: string) => 
   ipcMain.handle('workspace:setActive', safeHandle(async (_, id: string) => {
     await setActiveWorkspace(id)
     return undefined
+  }))
+
+  ipcMain.handle('workspace:gitInfo', safeHandle(async (_, rootPath: string) => {
+    return await getGitInfo(rootPath)
   }))
 
   // --- Personas --------------------------------------------------------------

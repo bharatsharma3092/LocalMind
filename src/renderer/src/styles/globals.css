@@ -274,3 +274,30 @@ button, a, input, select, textarea, [role="button"] {
 .btn-danger {
   @apply px-4 py-2 bg-danger text-white rounded-lg hover:opacity-90 transition-opacity text-sm;
 }
+
+/* ── "Thinking" indicator (shown while the LLM prepares a response) ── */
+@keyframes lm-thinking-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.94); }
+  50%      { opacity: 1;    transform: scale(1.06); }
+}
+.lm-thinking-pulse {
+  animation: lm-thinking-pulse 1.1s var(--motion-ease) infinite;
+  transform-origin: center;
+}
+
+@keyframes lm-thinking-dot {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40%           { opacity: 1;    transform: translateY(-2px); }
+}
+.lm-thinking-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background-color: var(--color-on-surface-variant);
+  display: inline-block;
+  animation: lm-thinking-dot 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-thinking-pulse, .lm-thinking-dot { animation: none; }
+}

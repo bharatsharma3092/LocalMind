@@ -4,6 +4,10 @@ import { useProviderStore, type CustomProviderConfig } from '../../stores/provid
 import { usePersonaStore } from '../../stores/personaStore'
 import { McpConfigEditor } from '../mcp/McpConfigEditor'
 import { PersonaLibrary } from '../personas/PersonaLibrary'
+import { MemoryTabContent } from './MemoryTabContent'
+import { ProviderModelPicker } from './ProviderModelPicker'
+import { CloudflareConfig } from './CloudflareConfig'
+import { AgentBrowserConfig } from './AgentBrowserConfig'
 
 type ColorTheme = 'default' | 'amber' | 'orange' | 'rose' | 'crimson' | 'coral' | 'sunset' | 'gold' | 'copper' | 'blue' | 'sky' | 'cyan' | 'teal' | 'emerald' | 'green' | 'lime' | 'violet' | 'purple' | 'fuchsia' | 'pink' | 'slate'
 type WebSearchProvider = 'tavily' | 'serper' | 'exa' | 'duckduckgo'
@@ -818,10 +822,17 @@ export function SettingsPage({
                           {savedKeys[service] ? 'Saved' : 'Save'}
                         </button>
                       </div>
+                      {service === 'openai-api-key' && <ProviderModelPicker provider="openai" label="OpenAI" />}
+                      {service === 'openrouter-api-key' && <ProviderModelPicker provider="openrouter" label="OpenRouter" />}
+                      {service === 'google-api-key' && <ProviderModelPicker provider="google" label="Gemini" />}
                     </div>
                   ))}
                 </div>
               </section>
+
+              <CloudflareConfig />
+
+              <AgentBrowserConfig />
             </>
           ) : tab === 'profile' ? (
             <section className="space-y-5">
@@ -882,126 +893,14 @@ export function SettingsPage({
               </div>
             </section>
           ) : tab === 'memory' ? (
-            <section className="space-y-5">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-[12px] font-semibold text-on-surface-variant uppercase tracking-wider">Memory</h3>
-                  <p className="mt-1 text-xs text-on-surface-variant">Enabled memories are added to chat and agent context locally.</p>
-                </div>
-                <button
-                  onClick={async () => {
-                    const next = !memoryEnabled
-                    setMemoryEnabled(next)
-                    await window.localmind.settings.set('memoryEnabled', next)
-                  }}
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${memoryEnabled ? 'bg-primary-container text-white' : 'bg-surface-container-low text-on-surface-variant'}`}
-                >
-                  {memoryEnabled ? 'Memory On' : 'Memory Off'}
-                </button>
-              </div>
-
-              <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
-                <h4 className="text-sm font-semibold text-on-surface">Add memory</h4>
-                <textarea
-                  value={memoryDraft}
-                  onChange={(e) => setMemoryDraft(e.target.value)}
-                  placeholder="Example: I prefer concise engineering answers with exact file references."
-                  rows={3}
-                  className="mt-3 w-full resize-none rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
-                />
-                <button
-                  onClick={() => addMemory(memoryDraft)}
-                  className="mt-3 rounded-lg bg-primary-container px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
-                >
-                  Add to Memory
-                </button>
-              </div>
-
-              <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h4 className="text-sm font-semibold text-on-surface">Recent task memory</h4>
-                    <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-                      Personal Assistant keeps short-term notes about recent tasks it completed. These are local and capped automatically.
-                    </p>
-                  </div>
-                  <button
-                    onClick={clearShortTermMemories}
-                    disabled={shortTermMemories.length === 0}
-                    className="rounded-lg border border-outline-variant px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-error disabled:opacity-40"
-                  >
-                    Clear
-                  </button>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {shortTermMemories.length === 0 ? (
-                    <p className="text-sm text-on-surface-variant">No recent task memories yet.</p>
-                  ) : shortTermMemories.slice(0, 10).map((memory) => (
-                    <div key={memory.id} className="rounded-lg border border-outline-variant/70 bg-surface-container px-3 py-2">
-                      <p className="whitespace-pre-wrap text-sm leading-6 text-on-surface">{memory.content}</p>
-                      <p className="mt-1 text-[11px] uppercase tracking-wider text-on-surface-variant/70">
-                        {new Date(memory.createdAt).toLocaleString()}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <h4 className="text-sm font-semibold text-on-surface">Import from another AI app</h4>
-                  <button onClick={importMemoryFile} className="rounded-lg border border-outline-variant px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-on-surface">
-                    Load File
-                  </button>
-                </div>
-                <p className="mt-2 text-xs leading-5 text-on-surface-variant">
-                  Paste memories under Personal, Professional, Skills, and Interests headings. Each heading is saved as one grouped memory section.
-                </p>
-                <textarea
-                  value={memoryImportText}
-                  onChange={(e) => setMemoryImportText(e.target.value)}
-                  placeholder={`Personal:\n- Your personal notes\n\nProfessional:\n- Your work context\n\nSkills:\n- Your tools and strengths\n\nInterests:\n- Topics you care about`}
-                  rows={6}
-                  className="mt-3 w-full resize-y rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface outline-none focus:border-secondary"
-                />
-                <div className="mt-3 flex items-center gap-3">
-                  <button onClick={importMemoriesFromText} className="rounded-lg bg-primary-container px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">
-                    Import Memories
-                  </button>
-                  {memoryStatus && <span className="text-xs text-on-surface-variant">{memoryStatus}</span>}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                {memories.length === 0 ? (
-                  <p className="text-sm text-on-surface-variant">No memories saved yet.</p>
-                ) : memories.map((memory) => (
-                  <div key={memory.id} className="rounded-lg border border-outline-variant bg-surface-container-low p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="text-sm leading-6 text-on-surface">{memory.content}</p>
-                      <div className="flex shrink-0 gap-2">
-                        <button
-                          onClick={() => {
-                            const next = memories.map((item) => item.id === memory.id ? { ...item, enabled: !item.enabled } : item)
-                            saveMemories(next)
-                          }}
-                          className="rounded border border-outline-variant px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface"
-                        >
-                          {memory.enabled ? 'Enabled' : 'Disabled'}
-                        </button>
-                        <button
-                          onClick={() => saveMemories(memories.filter((item) => item.id !== memory.id))}
-                          className="rounded border border-outline-variant px-2 py-1 text-xs text-on-surface-variant hover:text-error"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                    <p className="mt-2 text-[11px] uppercase tracking-wider text-on-surface-variant/70">{memory.source}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
+            <MemoryTabContent
+              memoryEnabled={memoryEnabled}
+              onToggle={async () => {
+                const next = !memoryEnabled
+                setMemoryEnabled(next)
+                await window.localmind.settings.set('memoryEnabled', next)
+              }}
+            />
           ) : tab === 'models' ? (
             <>
               <section>

@@ -3,6 +3,7 @@ import { OllamaProvider } from './providers/ollama'
 import { OpenAIProvider } from './providers/openai'
 import { OpenRouterProvider } from './providers/openrouter'
 import { GoogleProvider } from './providers/google'
+import { CloudflareProvider } from './providers/cloudflare'
 import { CustomProvider, getCustomProvidersFromSettings } from './providers/custom'
 import { appStore } from '../settings/app-store'
 
@@ -25,6 +26,7 @@ export class LLMRouter {
     this.providers.set('openai', new OpenAIProvider())
     this.providers.set('openrouter', new OpenRouterProvider())
     this.providers.set('google', new GoogleProvider())
+    this.providers.set('cloudflare', new CloudflareProvider())
     this.reloadCustomProviders()
   }
 
@@ -77,8 +79,7 @@ export class LLMRouter {
     yield* provider.complete(request)
   }
 
-  async listModels(providerType: string): Promise<ModelInfo[]> {
-    if (providerType.startsWith('custom:')) {
+  async listModels(providerType: string): Promise<ModelInfo[]> {    if (providerType.startsWith('custom:')) {
       const provider = this.providers.get(providerType)
       if (!provider) throw new Error(`Provider "${providerType}" is not configured`)
       return provider.listModels()
@@ -107,8 +108,15 @@ export class LLMRouter {
     return provider.listModels()
   }
 
-  async validateProvider(providerType: string): Promise<boolean> {
+  /** Full model catalog for a provider, for user model selection. */
+  async listProviderCatalog(providerType: string): Promise<ModelInfo[]> {
     const provider = this.providers.get(providerType)
+    if (!provider) throw new Error(`Provider "${providerType}" is not configured`)
+    if (provider.listCatalog) return provider.listCatalog()
+    return provider.listModels()
+  }
+
+  async validateProvider(providerType: string): Promise<boolean> {    const provider = this.providers.get(providerType)
     if (!provider) return false
     return provider.validateConfig()
   }

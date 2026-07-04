@@ -68,12 +68,16 @@ interface ProviderStore {
   providerStatus: Record<string, ProviderStatus>
   providerErrors: Record<string, string>
   customProviders: CustomProviderConfig[]
+  /** User-selected models per built-in provider (openai/openrouter/google). Empty = auto list. */
+  enabledModels: Record<string, { id: string; name: string; contextWindow?: number }[]>
   setModel: (model: ModelInfo) => void
   refreshModels: (provider: string) => Promise<void>
   refreshAllModels: () => Promise<void>
   setProviderStatus: (provider: string, status: ProviderStatus) => void
   loadCustomProviders: () => Promise<void>
   saveCustomProviders: (providers: CustomProviderConfig[]) => Promise<void>
+  loadEnabledModels: () => Promise<void>
+  setEnabledModels: (provider: string, models: { id: string; name: string; contextWindow?: number }[]) => Promise<void>
 }
 
 export const useProviderStore = create<ProviderStore>((set, get) => ({
@@ -82,12 +86,29 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   providerStatus: {},
   providerErrors: {},
   customProviders: [],
+  enabledModels: {},
 
   setModel: (model) => {
     set({ selectedModel: model })
     try {
       window.localmind?.settings?.set('selectedModelInfo', model)
     } catch {}
+  },
+
+  loadEnabledModels: async () => {
+    try {
+      const res = await window.localmind.settings.get('enabledModels')
+      if (res.success && res.data && typeof res.data === 'object') {
+        set({ enabledModels: res.data })
+      }
+    } catch {}
+  },
+
+  setEnabledModels: async (provider, models) => {
+    const next = { ...get().enabledModels, [provider]: models }
+    set({ enabledModels: next })
+    await window.localmind.settings.set('enabledModels', next)
+    await get().refreshModels(provider)
   },
 
   loadCustomProviders: async () => {
@@ -97,6 +118,8 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         set({ selectedModel: savedRes.data })
       }
     } catch {}
+
+    await get().loadEnabledModels()
 
     try {
       const res = await window.localmind.settings.get('customProviders')
@@ -134,6 +157,28 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
       console.warn('[providerStore] window.localmind not available -- skipping refreshModels')
       return
     }
+
+    // If the user has explicitly selected models for this built-in provider,
+    // use exactly that selection instead of the auto/curated list.
+    const selection = get().enabledModels[provider]
+    if (selection && selection.length > 0) {
+      const models: ModelInfo[] = selection.map((m) => ({
+        id: m.id,
+        name: m.name ?? m.id,
+        provider,
+        contextWindow: extractContextWindow(m.id, m.contextWindow),
+        supportsVision: false,
+        supportsToolUse: true,
+      }))
+      set((s) => ({
+        availableModels: [...s.availableModels.filter((m) => m.provider !== provider), ...models],
+        providerStatus: { ...s.providerStatus, [provider]: 'online' },
+        providerErrors: { ...s.providerErrors, [provider]: '' },
+        selectedModel: s.selectedModel ?? models[0] ?? null,
+      }))
+      return
+    }
+
     try {
       const res = await window.localmind.llm.listModels(provider)
       if (res.success && res.data) {
@@ -174,7 +219,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   refreshAllModels: async () => {
     const { customProviders } = get()
 
-    const builtinProviders = ['ollama', 'openai', 'openrouter', 'google']
+    const builtinProviders = ['ollama', 'openai', 'openrouter', 'google', 'cloudflare']
     await Promise.allSettled(
       builtinProviders.map((p) => get().refreshModels(p))
     )

@@ -1,6 +1,8 @@
 import { mcpHostManager } from '../mcp/host-manager'
 import { extractFileContent } from '../files/extractor'
 import { searchWeb } from '../websearch/service'
+import { browserController } from '../browser/controller'
+import { queryDocumentsDetailed, getRagDocumentCount } from '../rag/indexer'
 import type { ToolDefinition, ToolCall } from '@shared/types/localmind-api'
 import { execFile, spawn } from 'child_process'
 import { app, shell } from 'electron'
@@ -62,7 +64,14 @@ const writeTools = new Set([
 ])
 const deleteTools = new Set(['local__delete_path'])
 const shellTools = new Set(['local__run_npm_script', 'local__run_command', 'local__launch_app'])
-const networkTools = new Set(['web__search', 'local__open_url'])
+const networkTools = new Set([
+  'web__search',
+  'local__open_url',
+  'local__browser_open',
+  'local__browser_click',
+  'local__browser_type',
+  'local__browser_press_key',
+])
 const protectedPathPatterns = [
   '.env',
   '.env.*',
@@ -780,6 +789,149 @@ export function getLocalWorkspaceTools(): ToolDefinition[] {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_open',
+        description: 'Open a controllable browser window and navigate to a URL. Returns the page title and readable text. Use this to actually browse the web and read page content (not just launch a browser).',
+        parameters: {
+          type: 'object',
+          required: ['url'],
+          properties: {
+            url: { type: 'string', description: 'The URL to navigate to (https assumed if no scheme).' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_read',
+        description: 'Read the readable text and title of the currently open browser page. Use after navigating or interacting to see the latest page content.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_click',
+        description: 'Click an element on the current browser page. Provide a CSS selector or the visible text of a link/button.',
+        parameters: {
+          type: 'object',
+          required: ['target'],
+          properties: {
+            target: { type: 'string', description: 'A CSS selector, or the visible text of the link/button to click.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_type',
+        description: 'Type text into an input or textarea on the current browser page, identified by a CSS selector. Optionally submit the form.',
+        parameters: {
+          type: 'object',
+          required: ['selector', 'text'],
+          properties: {
+            selector: { type: 'string', description: 'CSS selector of the input/textarea (e.g. input[name="q"]).' },
+            text: { type: 'string', description: 'The text to type.' },
+            submit: { type: 'boolean', description: 'Submit the form / press Enter after typing. Defaults to false.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_screenshot',
+        description: 'Capture a screenshot of the current browser page and save it locally. Returns the saved file path.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_close',
+        description: 'Close the agent browser window when finished.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_back',
+        description: 'Navigate back to the previous page in the browser history. Returns the resulting page text.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_forward',
+        description: 'Navigate forward in the browser history. Returns the resulting page text.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_reload',
+        description: 'Reload the current browser page. Returns the resulting page text.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_scroll',
+        description: 'Scroll the current page to reveal more content.',
+        parameters: {
+          type: 'object',
+          properties: {
+            direction: { type: 'string', enum: ['down', 'up', 'top', 'bottom'], description: 'Scroll direction. Defaults to down.' },
+            amount: { type: 'number', description: 'Pixels to scroll for up/down. Defaults to 800.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_wait',
+        description: 'Wait for a number of milliseconds, or until a CSS selector appears on the page (max 15s). Use after actions that trigger loading.',
+        parameters: {
+          type: 'object',
+          required: ['target'],
+          properties: {
+            target: { type: 'string', description: 'Milliseconds to wait (e.g. "1500"), or a CSS selector to wait for.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_links',
+        description: 'List up to 50 links on the current page with their text and URL. Useful for deciding what to click or navigate to next.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'local__browser_press_key',
+        description: 'Press a keyboard key on the current page, optionally focusing a CSS selector first. Useful for Enter, Tab, Escape, ArrowDown, etc.',
+        parameters: {
+          type: 'object',
+          required: ['key'],
+          properties: {
+            key: { type: 'string', description: 'The key to press, e.g. Enter, Tab, Escape, ArrowDown.' },
+            selector: { type: 'string', description: 'Optional CSS selector to focus before pressing the key.' },
+          },
+        },
+      },
+    },
   ]
 }
 
@@ -799,6 +951,68 @@ export function getSkillTools(skills: Array<{ id: string; name: string; descript
         },
       },
     }))
+}
+
+export function getRagTools(): ToolDefinition[] {
+  // Only advertise retrieval when the user has actually indexed documents.
+  if (getRagDocumentCount() === 0) return []
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'rag__query',
+        description: 'Search the user\'s locally indexed knowledge documents (RAG) for passages relevant to a query. Use this when the user asks about the contents of their indexed files or uploaded documents.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'What to look for in the indexed documents.' },
+            topK: { type: 'number', description: 'Maximum passages to return. Defaults to 5.' },
+          },
+        },
+      },
+    },
+  ]
+}
+
+export function isRagToolName(name: string): boolean {
+  return name === 'rag__query'
+}
+
+export async function executeRagToolCall(
+  toolCall: ToolCall
+): Promise<{ role: 'tool'; content: string; toolCallId: string }> {
+  let args: Record<string, any> = {}
+  try {
+    args = JSON.parse(toolCall.arguments || '{}')
+  } catch {
+    args = {}
+  }
+
+  const query = String(args.query ?? '').trim()
+  if (!query) {
+    return {
+      role: 'tool',
+      content: JSON.stringify({ error: 'query is required' }),
+      toolCallId: toolCall.id,
+    }
+  }
+
+  try {
+    const topK = Math.min(Math.max(Number(args.topK) || 5, 1), 20)
+    const results = await queryDocumentsDetailed(query, topK)
+    return {
+      role: 'tool',
+      content: JSON.stringify({ query, results }),
+      toolCallId: toolCall.id,
+    }
+  } catch (err: any) {
+    return {
+      role: 'tool',
+      content: JSON.stringify({ error: err.message ?? 'RAG query failed' }),
+      toolCallId: toolCall.id,
+    }
+  }
 }
 
 export function getWebSearchTools(): ToolDefinition[] {
@@ -1235,6 +1449,86 @@ export async function executeLocalToolCall(
       const pid = child.pid
       child.unref()
       return { role: 'tool', content: JSON.stringify({ success: true, launched: command, args: appArgs, pid }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_open') {
+      const url = String(args.url ?? '').trim()
+      if (!url) throw new Error('url is required')
+      const result = await browserController.navigate(url)
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_read') {
+      const result = await browserController.readPage()
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_click') {
+      const target = String(args.target ?? '').trim()
+      if (!target) throw new Error('target is required')
+      const result = await browserController.click(target)
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_type') {
+      const selector = String(args.selector ?? '').trim()
+      const text = String(args.text ?? '')
+      if (!selector) throw new Error('selector is required')
+      const result = await browserController.type(selector, text, !!args.submit)
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_screenshot') {
+      const file = await browserController.screenshot()
+      return { role: 'tool', content: JSON.stringify({ success: true, path: file }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_close') {
+      const closed = browserController.close()
+      return { role: 'tool', content: JSON.stringify({ success: true, closed }), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_back') {
+      const result = await browserController.goBack()
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_forward') {
+      const result = await browserController.goForward()
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_reload') {
+      const result = await browserController.reload()
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_scroll') {
+      const direction = (['down', 'up', 'top', 'bottom'].includes(args.direction) ? args.direction : 'down') as
+        | 'down'
+        | 'up'
+        | 'top'
+        | 'bottom'
+      const result = await browserController.scroll(direction, Number(args.amount) || 800)
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_wait') {
+      const target = args.target ?? '1000'
+      const result = await browserController.waitFor(target)
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_links') {
+      const result = await browserController.links()
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
+    }
+
+    if (toolCall.name === 'local__browser_press_key') {
+      const key = String(args.key ?? '').trim()
+      if (!key) throw new Error('key is required')
+      const result = await browserController.pressKey(key, args.selector ? String(args.selector) : undefined)
+      return { role: 'tool', content: JSON.stringify(result), toolCallId: toolCall.id }
     }
 
     return {
